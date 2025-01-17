@@ -3,3 +3,8 @@
 /xml
 /old/face_recognition_model.h5
 /old/face_recognition_model_efficientnet.h5
+/unknown-faces
+/stored-faces
+/evidences
+/detected_persons
+/dataset
