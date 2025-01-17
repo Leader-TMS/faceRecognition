@@ -1,0 +1,5 @@
+/venv
+/yolo
+/xml
+/old/face_recognition_model.h5
+/old/face_recognition_model_efficientnet.h5
