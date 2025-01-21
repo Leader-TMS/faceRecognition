@@ -195,14 +195,14 @@ def getNameFace(frame, trackerId):
     if frame.size > 0:
         global inputRFID, seeRFID, userAreCheckIn
         if trackerId not in setTrackerName:
-            setTrackerName[trackerId] = {"name": "Unknown", "reCheckFace": 0, "authenticate": "", "numAuthenticate": 0}
-        if setTrackerName[trackerId]["numAuthenticate"] > -40:
-            if seeRFID:
-                trackerName = saveEvidence(frame, trackerId)
-                if isinstance(trackerName, str):
-                    setTrackerName[trackerId]["name"] = trackerName
-                    setTrackerName[trackerId]["numAuthenticate"] +=1
-            elif setTrackerName[trackerId]["name"] == "Unknown":
+            setTrackerName[trackerId] = {"name": "Unknown", "authenticate": "", "numAuthenticate": 0, "testTime": ""}
+        if setTrackerName[trackerId]["numAuthenticate"] > -2:
+            # if seeRFID:
+            #     trackerName = saveEvidence(frame, trackerId)
+            #     if isinstance(trackerName, str):
+            #         setTrackerName[trackerId]["name"] = trackerName
+            #         setTrackerName[trackerId]["numAuthenticate"] +=1
+            if setTrackerName[trackerId]["name"] == "Unknown":
                     trackerName = faceRecognition(frame)
                     if isinstance(trackerName, str) and trackerName != "Unknown":
                         setTrackerName[trackerId]["name"] = trackerName
@@ -212,25 +212,25 @@ def getNameFace(frame, trackerId):
                         saveEvidence(frame, trackerId, trackerName)
                     else:
                         setTrackerName[trackerId]["numAuthenticate"] -=1
-            elif setTrackerName[trackerId]["reCheckFace"] >= fps * 2 and setTrackerName[trackerId]["numAuthenticate"] < 3:
+                    setTrackerName[trackerId]["testTime"] = datetime.now()
+                    
+            elif setTrackerName[trackerId]["numAuthenticate"] < 3:
                 trackerName = faceRecognition(frame)
                 if isinstance(trackerName, str) and trackerName != "Unknown":
                     if setTrackerName[trackerId]["name"] == trackerName:
                         setTrackerName[trackerId]["numAuthenticate"] +=1
+                        setTrackerName[trackerId]["testTime"] = datetime.now()
                     else:
                         setTrackerName[trackerId]["numAuthenticate"] -=1
                         saveEvidence(frame, trackerId, trackerName)
                     setTrackerName[trackerId]["name"] = trackerName
                 else:
                     setTrackerName[trackerId]["name"] = "Unknown"
-                setTrackerName[trackerId]["reCheckFace"] = 0
-            elif setTrackerName[trackerId]["numAuthenticate"] < 3:
-                setTrackerName[trackerId]["reCheckFace"]+=1
         elif seeRFID:
             trackerName = saveEvidence(frame, trackerId)
             if isinstance(trackerName, str):
                 setTrackerName[trackerId]["name"] = trackerName
-        print(setTrackerName[trackerId])
+        print(f"setTrackerName: {trackerId, setTrackerName[trackerId]}")
 
 def scanRFID():
     global inputRFID, seeRFID
@@ -267,7 +267,14 @@ def videoCapture():
                     checkPointLine = cv2.pointPolygonTest(points, (topPoint, y), False)
                     if checkPointLine > 0:
                         cv2.putText(frame, f'getNameFace', (x, y - 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
-                        getNameFace(frame[y:h, x:w], trackerId)
+                        if not setTrackerName or trackerId not in setTrackerName:
+                            getNameFace(frame[y:h, x:w], trackerId)
+                        elif trackerId in setTrackerName and round(((datetime.now() - setTrackerName[trackerId]["testTime"]).total_seconds()), 2) >= 2:
+                            timeDifference = round(((datetime.now() - setTrackerName[trackerId]["testTime"]).total_seconds()), 2)
+                            getNameFace(frame[y:h, x:w], trackerId)
+                        else:
+                            break
+                
             labels = [
                 f"# {tracker_id} {setTrackerName[tracker_id]['name']} {confidence:0.2f}" if tracker_id in setTrackerName else f"# {tracker_id} Unknown {confidence:0.2f}"
                 for confidence, tracker_id
