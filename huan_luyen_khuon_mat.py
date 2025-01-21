@@ -32,13 +32,15 @@ for person_name in os.listdir(dataset_dir):
                     embedding = inception_model(face.unsqueeze(0)).detach().numpy()
                     embeddings.append(embedding.flatten())
                     labels.append(person_name)
-
+            else:
+                print(f'No face found in {img_name}')
+                
 label_encoder = LabelEncoder()
 labels_encoded = label_encoder.fit_transform(labels)
 
 embeddings = np.array(embeddings)
 
-X_train, X_test, y_train, y_test = train_test_split(embeddings, labels_encoded, test_size=0.2, random_state=60)
+X_train, X_test, y_train, y_test = train_test_split(embeddings, labels_encoded, test_size=0.2, random_state=100)
 
 # huấn luyện mô hình SVM
 svm = SVC(kernel='linear', probability=True)

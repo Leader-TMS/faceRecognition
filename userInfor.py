@@ -167,46 +167,63 @@
   
 # # Create an infinite loop for displaying app on screen 
 # app.mainloop() 
-
+#-------------------------------------------------------------------
 import tkinter as tk
+from tkinter import ttk, Tk, Canvas, Entry, Text, Button, PhotoImage, Label, messagebox
+from pathlib import Path
 from PIL import Image, ImageTk
 import cv2
+from datetime import datetime
+from HeadPoseEstimation import cameraForward
+import os
 
-app = tk.Tk()
-app.title("Camera Display and Info")
-app.geometry("1200x800")
-captureFlag = False
+OUTPUT_PATH = os.path.dirname(__file__)
+ASSETS_PATH = os.path.join(OUTPUT_PATH, "assets", "images")
 
-cameras = [cv2.VideoCapture(i) for i in range(3)]
-labels = []
-for i in range(3):
-    label = tk.Label(app)
-    label.grid(row=0, column=i, padx=10, pady=10)
-    labels.append(label)
+def relativeToAssets(path: str) -> str:
+    return os.path.join(ASSETS_PATH, path)
 
-width, height = 400, 300
-for camera in cameras:
-    camera.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-
-def open_camera(vid, label_widget):
+def openCamera(vid, labelWidget):
     ret, frame = vid.read()
     if not ret:
         print("Cannot read frame from camera!")
         return
-    opencv_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    captured_image = Image.fromarray(opencv_image)
-    photo_image = ImageTk.PhotoImage(image=captured_image)
+    
     if captureFlag:
-        cv2.imwrite(f"camera_{1}_image.jpg", frame)
-    label_widget.photo_image = photo_image
-    label_widget.configure(image=photo_image)
-    label_widget.after(15, open_camera, vid, label_widget)
+        opencvImage = cameraForward(frame, None, entry2.get())
+        opencvImage = cv2.cvtColor(opencvImage, cv2.COLOR_RGB2BGR)
+    else:
+        frame = cv2.flip(frame, 1)
+        opencvImage = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+    capturedImage = Image.fromarray(opencvImage)
+    photoImage = ImageTk.PhotoImage(image=capturedImage)
+
+    labelWidget.photoImage = photoImage
+    labelWidget.configure(image=photoImage)
+    labelWidget.after(25, openCamera, vid, labelWidget)
+
+def toggleCapture():
+    global captureFlag
+    if captureFlag:
+        stopCapture()  # Dừng chụp ảnh
+        # startButton.config(text="Bắt đầu (chụp hình)")  # Đổi tên nút
+    else:
+        startCapture()  # Bắt đầu chụp ảnh
+        # startButton.config(text="Kết thúc")  # Đổi tên nút
 
 def startCapture():
     global captureFlag
+    folderName = entry2.get()
+
+    if not folderName:
+        messagebox.showwarning("Input Error", "Vui lòng nhập mã nhân viên!")
+        return
+    
     captureFlag = True
-    print("Start capturing images.")
+    folderPath = os.path.join("dataset", folderName)
+    if not os.path.exists(folderPath):
+        os.makedirs(folderPath)
 
 def stopCapture():
     global captureFlag
@@ -215,31 +232,189 @@ def stopCapture():
 
 def exitProgram():
     print("Exiting program.")
-    app.quit()
+    window.quit()
 
-for i, camera in enumerate(cameras):
-    open_camera(camera, labels[i])
+window = Tk()
+window.geometry("894x480")
+window.configure(bg="#FFFFFF")
+window.title("Camera Display and Info")
+captureFlag = False
 
-labels_input = ["Name:", "Age:", "RFID:"]
-entries = []
-for i, label_text in enumerate(labels_input):
-    label = tk.Label(app, text=label_text)
-    label.grid(row=i+3, column=0, padx=10, pady=10)
-    entry = tk.Entry(app)
-    entry.grid(row=i+3, column=1, padx=10, pady=10)
-    entries.append(entry)
+canvas = Canvas(
+    window,
+    bg="#FFFFFF",
+    height=480,
+    width=894,
+    bd=0,
+    highlightthickness=0,
+    relief="ridge"
+)
 
-submitButton = tk.Button(app, text="Submit Info", command=lambda: print(f"Name: {entries[0].get()}, Age: {entries[1].get()}, RFID: {entries[2].get()}"))
-submitButton.grid(row=6, column=0, columnspan=2, padx=10, pady=10)
+canvas.place(x=0, y=0)
+imageImage1 = PhotoImage(
+    file=relativeToAssets("image_1.png"))
+image1 = canvas.create_image(
+    767.0,
+    240.0,
+    image=imageImage1
+)
 
-startButton = tk.Button(app, text="Start Capture", command=startCapture)
-startButton.grid(row=2, column=0, padx=10, pady=10)
+imageImage2 = PhotoImage(
+    file=relativeToAssets("image_2.png"))
+image2 = canvas.create_image(
+    767.0,
+    230.0,
+    image=imageImage2
+)
 
-stopButton = tk.Button(app, text="Stop Capture", command=stopCapture)
-stopButton.grid(row=2, column=1, padx=10, pady=10)
+labelWidget = Label(window)
+labelWidget.place(x=0, y=0)
 
-exitButton = tk.Button(app, text="Exit", command=exitProgram)
-exitButton.grid(row=2, column=2, padx=10, pady=10)
+camera = cv2.VideoCapture(0)
+camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-app.mainloop()
+openCamera(camera, labelWidget)
 
+buttonImage1 = PhotoImage(
+    file=relativeToAssets("button_1.png"))
+button1 = Button(
+    image=buttonImage1,
+    borderwidth=0,
+    highlightthickness=0,
+    command=exitProgram,
+    relief="flat"
+)
+button1.place(
+    x=657.0,
+    y=348.0,
+    width=220.0,
+    height=30.0
+)
+
+buttonImage2 = PhotoImage(
+    file=relativeToAssets("button_2.png"))
+button2 = Button(
+    image=buttonImage2,
+    borderwidth=0,
+    highlightthickness=0,
+    command=toggleCapture,
+    relief="flat"
+)
+button2.place(
+    x=657.0,
+    y=308.0,
+    width=220.0,
+    height=30.0
+)
+
+entryImage1 = PhotoImage(
+    file=relativeToAssets("entry_1.png"))
+entryBg1 = canvas.create_image(
+    764.5,
+    275.5,
+    image=entryImage1
+)
+entry1 = Entry(
+    bd=0,
+    bg="#F6F7F9",
+    fg="#000716",
+    highlightthickness=0
+)
+entry1.place(
+    x=660.0,
+    y=265.0,
+    width=209.0,
+    height=19.0
+)
+
+imageImage4 = PhotoImage(
+    file=relativeToAssets("image_4.png"))
+image4 = canvas.create_image(
+    766.0,
+    269.0,
+    image=imageImage4
+)
+
+imageImage5 = PhotoImage(
+    file=relativeToAssets("image_5.png"))
+image5 = canvas.create_image(
+    767.0,
+    213.0,
+    image=imageImage5
+)
+
+entryImage2 = PhotoImage(
+    file=relativeToAssets("entry_2.png"))
+entryBg2 = canvas.create_image(
+    765.5,
+    219.5,
+    image=entryImage2
+)
+entry2 = Entry(
+    bd=0,
+    bg="#F6F7F9",
+    fg="#000716",
+    highlightthickness=0
+)
+entry2.place(
+    x=661.0,
+    y=209.0,
+    width=209.0,
+    height=19.0
+)
+
+imageImage6 = PhotoImage(
+    file=relativeToAssets("image_6.png"))
+image6 = canvas.create_image(
+    766.0,
+    441.0,
+    image=imageImage6
+)
+
+canvas.create_text(
+    705.0,
+    156.0,
+    anchor="nw",
+    text="Phạm Ngọc Minh ",
+    fill="#575757",
+    font=("Amiko-Bold", 14 * -1)
+)
+
+imageImage7 = PhotoImage(
+    file=relativeToAssets("image_7.png"))
+image7 = canvas.create_image(
+    766.0,
+    115.0,
+    image=imageImage7
+)
+
+imageImage8 = PhotoImage(
+    file=relativeToAssets("image_8.png"))
+image8 = canvas.create_image(
+    771.0,
+    31.0,
+    image=imageImage8
+)
+
+# labelsInput = ["Name:", "Gender:", "RFID:"]
+# entries = []
+# for i, labelText in enumerate(labelsInput):        
+#     label = Label(window, text=labelText).grid(row=i, column=1, padx=10, pady=10)
+#     if labelText == "Gender:":
+#         entry = ttk.Combobox(window, values=["Male", "Female", "Other"], state="readonly").grid(row=i + 1, column=1, padx=10, pady=10)
+#     else:
+#         entry = Entry(window).grid(row=i + 1, column=1, padx=10, pady=10, sticky= tk.S)
+#     entries.append(entry)
+    
+# submitButton = Button(window, text="Xác nhận", command=lambda: print(f"Name: {entries[0].get()}, RFID: {entries[1].get()}"))
+# submitButton.grid(row=6, column=1, padx=10, pady=10)
+
+# startButton = Button(window, text="Bắt đầu (chụp hình)", command=toggleCapture)
+# startButton.grid(row=4, column=1, padx=10, pady=10)
+
+# exitButton = Button(window, text="Exit", command=exitProgram)
+# exitButton.grid(row=4, column=1, columnspan=4, padx=10, pady=10)
+
+window.resizable(False, False)
+window.mainloop()
