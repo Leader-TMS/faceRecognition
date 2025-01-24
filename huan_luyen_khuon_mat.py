@@ -40,7 +40,7 @@ labels_encoded = label_encoder.fit_transform(labels)
 
 embeddings = np.array(embeddings)
 
-X_train, X_test, y_train, y_test = train_test_split(embeddings, labels_encoded, test_size=0.2, random_state=100)
+X_train, X_test, y_train, y_test = train_test_split(embeddings, labels_encoded, test_size=0.2, random_state=150)
 
 # huấn luyện mô hình SVM
 svm = SVC(kernel='linear', probability=True)
