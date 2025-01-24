@@ -38,14 +38,14 @@ def drawEllipseForProgress(frame, xFace, yFace, wFace, hFace, looking):
     numRays = int(circumference / (radius * 0.1 * 0.8))
 
     minRays = {
-        "right": 40,
-        "left": 40,
-        "down": 40,
-        "up": 40,
-        # "right_up": 40,
-        # "right_down": 40,
-        # "left_up": 40,
-        # "left_down": 40
+        "right": 30,
+        "left": 30,
+        "down": 30,
+        "up": 30,
+        # "right_up": 50,
+        # "right_down": 50,
+        # "left_up": 50,
+        # "left_down": 50
     }
 
     isDone = 0
@@ -80,7 +80,6 @@ def drawEllipseForProgress(frame, xFace, yFace, wFace, hFace, looking):
             # elif angle >= 292.5 and angle < 337.5:
             #     direction = "right_up"
 
-            print(f"angle: {angle}")
             if (angle >= 0 and angle < 45) or (angle >= 315 and angle < 360):
                 direction = "right"
             elif angle >= 45 and angle < 135:
@@ -109,7 +108,7 @@ def drawEllipseForProgress(frame, xFace, yFace, wFace, hFace, looking):
         return False
     
 def cameraForward(frame, windowName = None, folderName = None):
-    # start = time.time()
+    start = time.time()
 
     frame = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
 
@@ -205,27 +204,27 @@ def cameraForward(frame, windowName = None, folderName = None):
                     text = "Looking Left"
                     # checkMore = False
                     # if y >= -15:
-                        # if x < -5:
-                        #     checkMore = True
-                        #     checkAndSaveFace(x, "left_down", faceFilename, faceImgResized)
-                        #     text += " Down"
-                        # elif x > 6.5:
-                        #     checkMore = True
-                        #     checkAndSaveFace(x, "left_up", faceFilename, faceImgResized)
-                        #     text += " Up"
-                        # if not checkMore:
-                            # checkAndSaveFace(y, "left", faceFilename, faceImgResized)
+                    #     if x < -5:
+                    #         checkMore = True
+                    #         checkAndSaveFace(x, "left_down", faceFilename, faceImgResized)
+                    #         text += " Down"
+                    #     elif x > 6.5:
+                    #         checkMore = True
+                    #         checkAndSaveFace(x, "left_up", faceFilename, faceImgResized)
+                    #         text += " Up"
+                    #     if not checkMore:
+                    #         checkAndSaveFace(y, "left", faceFilename, faceImgResized)
                     # else:
-                        # if x < 3:
-                        #     checkMore = True
-                        #     checkAndSaveFace(x, "left_down", faceFilename, faceImgResized)
-                        #     text += " Down"
-                        # elif x > 10:
-                        #     checkMore = True
-                        #     checkAndSaveFace(x, "left_up", faceFilename, faceImgResized)
-                        #     text += " Up"
-                        # if not checkMore:
-                            # checkAndSaveFace(y, "left", faceFilename, faceImgResized)
+                    #     if x < 3:
+                    #         checkMore = True
+                    #         checkAndSaveFace(x, "left_down", faceFilename, faceImgResized)
+                    #         text += " Down"
+                    #     elif x > 10:
+                    #         checkMore = True
+                    #         checkAndSaveFace(x, "left_up", faceFilename, faceImgResized)
+                    #         text += " Up"
+                    # if not checkMore:
+                    #         checkAndSaveFace(y, "left", faceFilename, faceImgResized)
                 elif y > 3.5:
                     checkAndSaveFace(y, "right", faceFilename, faceImgResized)
                     text = "Looking Right"
@@ -250,8 +249,8 @@ def cameraForward(frame, windowName = None, folderName = None):
                     #         checkMore = True
                     #         checkAndSaveFace(x, "right_up", faceFilename, faceImgResized)
                     #         text += " Up"
-                    #     if not checkMore:
-                    #         checkAndSaveFace(y, "right", faceFilename, faceImgResized)
+                    # if not checkMore:
+                    #     checkAndSaveFace(y, "right", faceFilename, faceImgResized)
                 elif x < -2:
                     checkAndSaveFace(x, "down", faceFilename, faceImgResized)
                     text = "Looking Down"
@@ -289,10 +288,10 @@ def cameraForward(frame, windowName = None, folderName = None):
             # cv2.putText(frame, f"Right Up: {len(looking['right_up'])}", (500, 400), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
             # cv2.putText(frame, f"Right Down: {len(looking['right_down'])}", (500, 440), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
 
-        # end = time.time()
-        # totalTime = end - start
-        # fps = 1 / totalTime
-        # cv2.putText(frame, f'FPS: {int(fps)}', (20, 460), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        end = time.time()
+        totalTime = end - start
+        fps = 1 / totalTime
+        cv2.putText(frame, f'FPS: {int(fps)}', (20, 460), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         # mpDrawing.draw_landmarks(
         #     image=frame,
         #     landmark_list=faceLandmarks,

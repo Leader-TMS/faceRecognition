@@ -21,7 +21,7 @@ model.verbose = False
 stop_flag = False
 inputRFID = ""
 
-mtcnn = MTCNN(keep_all=True)
+mtcnn = MTCNN(keep_all = False)
 inception_model = InceptionResnetV1(pretrained='vggface2').eval()
 svm_model = joblib.load('svm_model.pkl')
 label_encoder = joblib.load('label_encoder.pkl')
@@ -34,22 +34,20 @@ def saveFaceUnknown(faces):
     print(f"Saved face")
 
 def faceRecognition(frame, trackerId = None, faceMesh = None):
-    print('faceRecognition')
     results = model(frame)
-    print(f"len {len(results)}")
+    print(len(results[0].boxes.data))
     for i, box in enumerate(results[0].boxes.data):
         x, y, w, h = map(int, box[:4])
         faces = frame[y - 10:h + 10, x - 10:w + 10]
         try:
-            print(f"mtcnn: {mtcnn}")
-            faces_mtcnn = mtcnn(faces)
-            if faces_mtcnn is not None:
-                for face in faces_mtcnn:
-                    embedding = inception_model(face.unsqueeze(0)).detach().numpy().flatten()
+            faces = mtcnn(faces)
+            if faces is not None:
+            #     for face in faces_mtcnn:
+                    print(f"face: {faces}")
+                    embedding = inception_model(faces.unsqueeze(0)).detach().numpy().flatten()
                     embedding = np.array([embedding])
-                    
-                    label_index = svm_model.predict(embedding)[0]
-                    label = label_encoder.inverse_transform([label_index])[0]
+                    label_index = svm_model.predict(embedding)[-1]
+                    label = label_encoder.inverse_transform([label_index])[-1]
                     
                     prob = svm_model.predict_proba(embedding)[0]
                     prob_percent = prob[label_index] * 100
@@ -67,9 +65,9 @@ def faceRecognition(frame, trackerId = None, faceMesh = None):
                                 head_tilt_pose = pipelineHeadTiltPose(face_direction, results.multi_face_landmarks[0])
                         return label, head_tilt_pose
                     prob_text = f"{prob_percent:.2f}%"
-                    
+                
                     cv2.rectangle(frame, (x, y), (w, h), (0, 255, 0), 2)
-                    cv2.putText(frame, f"{label} {inputRFID} ({prob_text})", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                    cv2.putText(frame, f"{label} {label_index} ({prob_text})", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             # else:
             #     if faces is not None and faces.size > 0:
             #         saveFaceUnknown(faces)
@@ -140,10 +138,15 @@ def video_capture():
     cap.set(cv2.CAP_PROP_FPS, 60)
     fps = cap.get(cv2.CAP_PROP_FPS)
     while True:
+        start = time.time()
         ret, frame = cap.read()
         if not ret:
             break
         frame = faceRecognition(frame)
+        end = time.time()
+        totalTime = end - start
+        fps = 1 / totalTime
+        cv2.putText(frame, f'FPS: {int(fps)}', (20, 460), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         cv2.imshow("Face Recognition", frame)
         
         key = cv2.waitKey(1) & 0xFF
