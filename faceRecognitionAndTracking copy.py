@@ -512,8 +512,15 @@ def videoCapture():
                     print("[2]")
                     if trackingIdAssign in arrTrackerId:
                         print("[3]")
-                        if setTrackerName[trackingIdAssign]["skip"]:
-                            print("[4]")
+                        if not checkTimer(setTrackerName[trackingIdAssign]["timer"]):
+                            if trackerInfo["name"] != "Unknown":
+                                percentage = round((trackerInfo['Unknown'] / trackerInfo['Known']) * 100, 2)
+                                if percentage < 20:
+                                    setTrackerName[trackingIdAssign]["timekeeping"] = True
+                                    updateInfo({trackerInfo['employeeCode']: originalFrame[y:h, x:w]})
+                                else:
+                                    setTrackerName[trackingIdAssign]["name"] = "Unknown"
+
                             index = arrTrackerId.index(trackingIdAssign) + 1
                             if index < len(arrTrackerId):
                                 print("[5]")
@@ -523,13 +530,21 @@ def videoCapture():
                                 print("[6]")
                                 trackingIdAssign = getMinTrackerId(arrTrackerId)
                                 appendTrackerName(trackingIdAssign)
-                                setTrackerName[trackingIdAssign]["skip"] = False
-                                setTrackerName[trackingIdAssign]["timer"] = datetime.now()
+                                if setTrackerName[trackingIdAssign]["name"] == "Unknown":
+                                    setTrackerName[trackingIdAssign]["timer"] = datetime.now()
                         else:
-                            if not checkTimer(setTrackerName[trackingIdAssign]["timer"]):
-                                setTrackerName[trackingIdAssign]["skip"] = True
+                            print(f"[{trackingIdAssign}] continue")
+                        # else:
+                        #     if not checkTimer(setTrackerName[trackingIdAssign]["timer"]):
+                        #         setTrackerName[trackingIdAssign]["skip"] = True
+                        #         if trackerInfo["name"] != "Unknown":
+                        #             percentage = round((trackerInfo['Unknown'] / trackerInfo['Known']) * 100, 2)
+                        #             if percentage < 20:
+                        #                 setTrackerName[trackingIdAssign]["timekeeping"] = True
+                        #                 updateInfo({trackerInfo['employeeCode']: originalFrame[y:h, x:w]})
                     else:
                         print("[7]")
+                        del setTrackerName[trackingIdAssign]
                         trackingIdAssign = getMinTrackerId(arrTrackerId)
                         appendTrackerName(trackingIdAssign)
 
@@ -543,9 +558,9 @@ def videoCapture():
 
                 trackerInfo = setTrackerName[trackingIdAssign]
 
-                if not checkTimer(trackerInfo["timer"]):
-                    print("[9]")
-                    setTrackerName[trackingIdAssign]["skip"] = True
+                # if not checkTimer(trackerInfo["timer"]):
+                #     print("[9]")
+                #     setTrackerName[trackingIdAssign]["skip"] = True
                     # if trackerInfo["name"] != "Unknown":
                     #     percentage = round((trackerInfo['Unknown'] / trackerInfo['Known']) * 100, 2)
                     #     if percentage < 20:
@@ -566,7 +581,7 @@ def videoCapture():
         totalTime = end - start
 
         fps = 1 / totalTime
-        cv2.putText(annotatedFrame, f'FPS: {int(fps)} inputRFID:{inputRFID} trackingIdAssign: {trackingIdAssign}', (20,40), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0,255,0), 2)
+        cv2.putText(annotatedFrame, f'FPS: {int(fps)} inputRFID:{inputRFID} trackingIdAssign: {trackingIdAssign}', (20,40), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0,255,0), 2)
         cv2.imshow("ByteTrack", annotatedFrame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
