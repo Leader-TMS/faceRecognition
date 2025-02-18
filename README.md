@@ -12,6 +12,8 @@ lần 3
 4 góc 410 -> 121 tấm: góc chính diện (nghiên vừa) 94% -> 96%, còn lại góc trái, phải, trên, dưới từ 83%
 8 góc 567 -> 222 tấm: góc chính diện (nghiên vừa) 96% -> 98%, còn lại góc trái, phải, trên, dưới từ 83% -> 98% -->
 
+ArcFace:  Hệ thống an ninh, giám sát, nhận diện khuôn mặt trong đám đông.
+VGGFace2: Nhận diện khuôn mặt đa dạng về chủng tộc, độ tuổi và điều kiện môi trường.
 
 Datasets and Accuracy
 
