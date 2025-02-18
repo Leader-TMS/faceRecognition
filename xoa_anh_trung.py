@@ -2,11 +2,11 @@ import os
 import imagehash
 from PIL import Image
 
-def get_image_hash(file_path):
-    image = Image.open(file_path)
+def getImageHash(filePath):
+    image = Image.open(filePath)
     return imagehash.average_hash(image)
 
-def find_duplicate_images_in_subfolders(directory):
+def findDuplicateImagesInSubfolders(directory):
     duplicates = []
     
     for root, dirs, files in os.walk(directory):
@@ -16,20 +16,21 @@ def find_duplicate_images_in_subfolders(directory):
             
             for file in files:
                 if file.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
-                    file_path = os.path.join(root, file)
-                    file_hash = get_image_hash(file_path)
+                    filePath = os.path.join(root, file)
+                    fileHash = getImageHash(filePath)
                     
-                    if file_hash in images:
-                        duplicates.append(file_path)
+                    if fileHash in images:
+                        duplicates.append(filePath)
                     else:
-                        images[file_hash] = file_path
+                        images[fileHash] = filePath
     print(f'Total duplicates found: {len(duplicates)}')              
     return duplicates
 
 directory = 'dataset'
 
-duplicates = find_duplicate_images_in_subfolders(directory)
+duplicates = findDuplicateImagesInSubfolders(directory)
 
 for duplicate in duplicates:
     # print(f"Removing duplicate image: {duplicate}")
     os.remove(duplicate)
+
