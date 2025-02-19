@@ -1,0 +1,16 @@
+deep_sort_realtime
+facenet_pytorch
+ImageHash
+joblib
+numpy
+opencv_contrib_python
+opencv_python
+opencv_python_headless
+Pillow
+Pillow
+scikit_learn
+supervision
+tensorflow
+torch
+ultralytics
+yolov5

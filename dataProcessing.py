@@ -1,7 +1,7 @@
 import sqlite3
 from datetime import datetime
 
-def getEmployeesByCode(employee_code):
+def getEmployeesByCode(employeeCode):
     conn = sqlite3.connect('employee.db')
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -10,7 +10,7 @@ def getEmployeesByCode(employee_code):
         SELECT employee_code, full_name FROM employees 
         WHERE employee_code = ? AND deleted_at IS NULL
         LIMIT 1
-    ''', (employee_code,))
+    ''', (employeeCode,))
 
     employee = cursor.fetchone()
 
@@ -18,7 +18,24 @@ def getEmployeesByCode(employee_code):
 
     return employee
 
-def saveAttendance(employee_code):
+def getEmployeesByRFID(rfid):
+    conn = sqlite3.connect('employee.db')
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        SELECT employee_code, full_name FROM employees 
+        WHERE rf_id = ? AND deleted_at IS NULL
+        LIMIT 1
+    ''', (rfid,))
+
+    employee = cursor.fetchone()
+
+    conn.close()
+
+    return employee
+
+def saveAttendance(employeeCode):
     conn = sqlite3.connect('employee.db')
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -27,17 +44,17 @@ def saveAttendance(employee_code):
         SELECT id FROM employees 
         WHERE employee_code = ? AND deleted_at IS NULL
         LIMIT 1
-    ''', (employee_code,))
+    ''', (employeeCode,))
 
     employee = cursor.fetchone()
     if employee:
-        employee_id = employee['id']
-        created_at = updated_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        employeeId = employee['id']
+        createdAt = updatedAt = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         cursor.execute('''
             INSERT INTO attendance (employee_id, created_at, updated_at, deleted_at)
             VALUES (?, ?, ?, ?)
-        ''', (employee_id, created_at, updated_at, None)) 
+        ''', (employeeId, createdAt, updatedAt, None)) 
 
     conn.commit()
     conn.close()
@@ -63,8 +80,8 @@ if __name__ == "__main__":
         )
     ''')
     employees = [
-        ('001', 'RF001', 'Phạm Ngọc Minh', '2000-02-13', 'M', 'pnminh1302@gmail.com', '0123456789', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
-        ('002', 'RF002', 'Nguyễn Quốc Anh', '2001-01-18', 'M', 'nqanh040101@gmail.com', '0987654321', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
+        ('001', '0496191378', 'Phạm Ngọc Minh', '2000-02-13', 'M', 'pnminh1302@gmail.com', '0123456789', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
+        ('002', '2188600829', 'Nguyễn Quốc Anh', '2001-01-18', 'M', 'nqanh040101@gmail.com', '0987654321', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
         ('003', 'RF003', 'Nguyễn Hoàng Linh Dương', '1995-09-12', 'F', 'luatduong95@gmail.com', '0112233445', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
         ('004', 'RF004', 'Nguyễn Chí Tài', '1990-02-15', 'M', 'info@tms-s.vn', '0123344556', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
         ('005', 'RF004', 'Trần Trọng Khiêm', '1994-11-21', 'M', 'khiem.trantrong94@gmail.com', '0123344556', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
