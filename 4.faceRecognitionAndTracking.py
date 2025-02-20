@@ -4,6 +4,7 @@ import mediapipe as mp
 import time
 import supervision as sv
 from facenet_pytorch import MTCNN, InceptionResnetV1
+from sklearn.preprocessing import normalize
 import joblib
 import numpy as np
 from datetime import datetime, timedelta
@@ -21,8 +22,8 @@ from dataProcessing import getEmployeesByCode, getEmployeesByRFID, saveAttendanc
 from PIL import Image
 
 # Setup Yolo and Yolo Face
-model = YOLO("yolo/yolo11m.pt")
-model.verbose = False
+# model = YOLO("yolo/yolo11m.pt")
+# model.verbose = False
 tracker = sv.ByteTrack()
 boundingBoxAnnotator = sv.BoxAnnotator()
 labelAnnotator = sv.LabelAnnotator()
@@ -30,6 +31,7 @@ labelAnnotator = sv.LabelAnnotator()
 modelFace = YOLO("yolo/yolov11s-face.pt")
 modelFace.verbose = False
 mtcnn = MTCNN(keep_all = True, thresholds=[0.5, 0.6, 0.6])
+
 inception_model = InceptionResnetV1(pretrained='vggface2').eval()
 svm_model = joblib.load('svmModel.pkl')
 label_encoder = joblib.load('labelEncoder.pkl')
@@ -38,14 +40,6 @@ label_encoder = joblib.load('labelEncoder.pkl')
 devs = os.listdir('/dev')
 devVideo = [int(dev[-1]) for dev in devs if dev.startswith('video')]
 devVideo = sorted(devVideo)[::2]
-
-rtsp = "rtsp://admin:bvTTDCaps999@192.168.40.38:554/cam/realmonitor?channel=1&subtype=0"
-video = "videos/6114574701101869790.mp4"
-cap = cv2.VideoCapture(rtsp)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-cap.set(cv2.CAP_PROP_FPS, 60)
-fps = cap.get(cv2.CAP_PROP_FPS)
 
 class Color:
     Red = (0, 0, 255)
@@ -104,14 +98,6 @@ def textToSpeech(text, speed=1.0):
     thread.start()
 
 def updateInfo(data = {}):
-    # try:
-        # with open(file_name, 'r', encoding='utf-8') as json_file:
-        #     data = json.load(json_file)
-    # except FileNotFoundError:
-    #     speech = threading.Thread(target=textToSpeech("Không tìm thấy tập tin!", 1.2))
-    #     speech.daemon = True
-    #     speech.start()
-    #     return False
     arrUnregistered = []
     arrRegistered = []
     listName = []
@@ -126,11 +112,6 @@ def updateInfo(data = {}):
             print(f"image: {image}")
             saveFaceDirection(image, f"evidences/valid/{fullName}")
             saveAttendance(employeeCode)
-            # data[employeeCode]['total_scan'] += 1
-            # current_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-            # data[employeeCode]['scanning_time'].append(current_time)
-            # with open(file_name, 'w', encoding='utf-8') as json_file:
-            #     json.dump(data, json_file, ensure_ascii=False, indent=4)
 
     listName = ','.join(listName)
 
@@ -149,7 +130,6 @@ def updateInfo(data = {}):
         speech.daemon = True
         speech.start()
         return False
-    # return data[employeeCode]['name']
 
 def saveFaceDirection(image, folderName):
     if  image.size > 0:
@@ -160,57 +140,30 @@ def saveFaceDirection(image, folderName):
         target_file_name = os.path.join(folderName, f'{current_time}.jpg')
         cv2.imwrite(target_file_name, image)
 
-def saveEvidence(result):
-    global inputRFID, seeRFID
-    nameInRFID = updateInfo("timekeepingData.json", result)
-    # if not nameInRFID:
-    #     setTrackerName[trackerId]["authenticate"] = "Invalid RFID info"
-    #     saveFaceDirection(frame, "evidences/invalid/" + setTrackerName[trackerId]["name"])
-    # else:
-    #     setTrackerName[trackerId]["name"] = nameInRFID
-    #     setTrackerName[trackerId]["authenticate"] = "Valid RFID info"
-    #     saveFaceDirection(frame, "evidences/valid/" + setTrackerName[trackerId]["name"])
-    # seeRFID = False
-    # inputRFID = ""
-    # return nameInRFID
-
-def faceRecognition(frame):
+def faceAuthentication(frame):
     try:
         label = "Unknown"
-        wFace = 0
-        maxWFace = 0
-        maxHFace = 0
-        onlyFace = None
         employeeCode = None
+        hFace, wFace = frame.shape[:2]
 
-        results = modelFace(frame)
-        for i, box in enumerate(results[0].boxes.data):
-            x, y, w, h = map(int, box[:4])
-            faces = frame[y - 10:h + 10, x - 10:w + 10]
-            hFace , wFace = faces.shape[:2]
-            if wFace > maxWFace:
-                maxWFace = wFace
-                maxHFace = hFace
-                onlyFace = faces
-
-        if onlyFace is not None and onlyFace.size > 0:
-            if maxWFace < targetWFace:
-                maxWFace = int(maxWFace * 1.45)
-                maxHFace = int(maxHFace * 1.45)
-                onlyFace = cv2.resize(onlyFace, (maxWFace, maxHFace), interpolation=cv2.INTER_LANCZOS4)
+        if frame is not None and frame.size > 0:
+            if wFace < targetWFace:
+                wFace = int(wFace * 1.45)
+                hFace = int(hFace * 1.45)
+                frame = cv2.resize(frame, (wFace, hFace), interpolation=cv2.INTER_LANCZOS4)
             
-            if maxWFace >= targetWFace:
-                faces_mtcnn = mtcnn(onlyFace)
-                if faces_mtcnn is not None:
+            if wFace >= targetWFace:
+                faces_mtcnn = mtcnn(frame)
+                if faces_mtcnn is not None and len(faces_mtcnn) > 0:
                     for i, face in enumerate(faces_mtcnn):
                         embedding = inception_model(face.unsqueeze(0)).detach().numpy().flatten()
-                        embedding = np.array([embedding])
+                        # embedding = np.array([embedding])
+                        embedding = normalize([embedding])
                         label_index = svm_model.predict(embedding)[0]
                         prob = svm_model.predict_proba(embedding)[0]
                         prob_percent = prob[label_index] * 100
-                        if prob_percent >= 85:
-                            # with open(file_name, 'r', encoding='utf-8') as jsonFile:
-                            #     data = json.load(jsonFile)
+                        print(f"prob_percent: {prob_percent}")
+                        if prob_percent >= 90:
                             employeeCode = label_encoder.inverse_transform([label_index])[0]
                             employeeCode = getEmployeesByCode(employeeCode)
                             if employeeCode:
@@ -221,22 +174,8 @@ def faceRecognition(frame):
     return label, employeeCode
 
 def getNameFace(frame = None, trackerId = None):
-    global inputRFID, seeRFID, userAreCheckIn
-    # if trackerId is not None and trackerId not in setTrackerName:
-    #     setTrackerName[trackerId] = {"name": "Unknown", "employeeCode": None, "Unknown": 0, "Known": 0, "authenticate": "", "timekeeping": False, "skip": False, "timer": datetime.now(), "time": datetime.now()}
-    #     if frame is None:
-    #         return 0
-
     if frame is not None and frame.size > 0:
-        # để lại check trường hợp
-        # if setTrackerName[trackerId]["name"] == "Unknown":
-        #     trackerName, employeeCode = faceRecognition(frame)
-        #     if isinstance(trackerName, str) and trackerName != "Unknown":
-        #         setTrackerName[trackerId]["name"] = trackerName
-        #         setTrackerName[trackerId]["employeeCode"] = employeeCode
-        #     setTrackerName[trackerId]["time"] = datetime.now()
-        # else:
-        trackerName, employeeCode = faceRecognition(frame)
+        trackerName, employeeCode = faceAuthentication(frame)
         if isinstance(trackerName, str) and trackerName != "Unknown":
             setTrackerName[trackerId]["name"] = trackerName
             setTrackerName[trackerId]["employeeCode"] = employeeCode
@@ -245,13 +184,7 @@ def getNameFace(frame = None, trackerId = None):
             setTrackerName[trackerId]["name"] = "Unknown"
             setTrackerName[trackerId]["employeeCode"] = None
             setTrackerName[trackerId]["Unknown"] = setTrackerName[trackerId]["Unknown"] + 1 
-
-        # print(f"setTrackerName: {trackerId, setTrackerName[trackerId]}") 
-
-        # elif seeRFID:
-        #     trackerName = saveEvidence(frame, trackerId)
-        #     if isinstance(trackerName, str):
-        #         setTrackerName[trackerId]["name"] = trackerName
+        print(f"setTrackerName: {trackerId, setTrackerName[trackerId]}") 
 
 def scanRFID():
     global inputRFID, seeRFID
@@ -291,10 +224,20 @@ def findNextLarger(arrTrackerId, trackingIdAssign):
 def delAndFindNextLarger(arrTrackerId, trackingIdAssign):
     if trackingIdAssign in setTrackerName:
         del setTrackerName[trackingIdAssign]
+        print(f"delAndFindNextLarger: {trackingIdAssign}")
     return findNextLarger(arrTrackerId, trackingIdAssign)
 
 def videoCapture():
     global checkTimeRecognition, trackingIdAssign
+
+    rtsp = "rtsp://admin:bvTTDCaps999@192.168.40.38:554/cam/realmonitor?channel=1&subtype=0"
+    video = "output_video.avi"
+    cap = cv2.VideoCapture(rtsp)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_FPS, 60)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    arrayFPS = []
     while cap.isOpened():
         start =  time.time()
         ret, frame = cap.read()
@@ -304,10 +247,36 @@ def videoCapture():
         originalFrame = frame.copy()
         cv2.polylines(frame, [points], isClosed=True, color=(0, 255, 0), thickness=2)
 
-        results = model(frame)[0]
+        results = modelFace(frame)[0]
+
         detections = sv.Detections.from_ultralytics(results)
-        detections = detections[detections.confidence >= 0.7]
+        detections = detections[detections.confidence >= 0.8]
         detections = detections[detections.class_id == 0]
+
+        scaleFactor = 0.02  # 5%
+
+        detections.xyxy[:, 0] *= (1 - scaleFactor)
+        detections.xyxy[:, 1] *= (1 - scaleFactor)
+        detections.xyxy[:, 2] *= (1 + scaleFactor)
+        detections.xyxy[:, 3] *= (1 + scaleFactor)
+
+        x = detections.xyxy[:, 0]
+        y = detections.xyxy[:, 1]
+        w = detections.xyxy[:, 2]
+        h = detections.xyxy[:, 3]
+
+        xCenter = (x + w) / 2
+        yCenter = (y + h) / 2
+
+        width = w - x
+        height = h - y
+        size = np.maximum(width, height)
+
+        detections.xyxy[:, 0] = xCenter - size / 2
+        detections.xyxy[:, 1] = yCenter - size / 2
+        detections.xyxy[:, 2] = xCenter + size / 2
+        detections.xyxy[:, 3] = yCenter + size / 2
+
         detections = tracker.update_with_detections(detections)
         arrDetection = {}
         if len(detections):
@@ -321,9 +290,7 @@ def videoCapture():
                 if checkPointLine > 0:
                     arrDetection[trackerId] = detection
 
-            print(f"start: {datetime.now()}")
-
-            if len(arrDetection) and checkTime(checkTimeRecognition):
+            if len(arrDetection) and checkTime(checkTimeRecognition, 0.1):
                 text = ""
                 arrTrackerId = sorted(arrDetection.keys()) if arrDetection is not None else []
                 if trackingIdAssign is None:
@@ -337,7 +304,7 @@ def videoCapture():
                 if trackingIdAssign not in setTrackerName:
                     setTrackerName[trackingIdAssign] = {"name": "Unknown", "employeeCode": None, "Unknown": 0, "Known": 0, "authenticate": "", "timekeeping": False, "timeChecked": 0, "timer": datetime.now(), "time": datetime.now()}
                 
-                if setTrackerName[trackingIdAssign]["timeChecked"] >= 3:
+                if setTrackerName[trackingIdAssign]["timeChecked"] >= 1:
                     text = "timeChecked >= 3"
                     if setTrackerName[trackingIdAssign]["timekeeping"]:
                         text = "timekeeping is True"
@@ -347,7 +314,8 @@ def videoCapture():
                         if setTrackerName[trackingIdAssign]["name"] != "Unknown":
                             text = "name is not Unknown"
                             percentage = round((setTrackerName[trackingIdAssign]['Unknown'] / setTrackerName[trackingIdAssign]['Known']) * 100, 2)
-                            if percentage < 20:
+                            print(f"percentage: {percentage}")
+                            if percentage <= 34:
                                 text = "percentage < 20"
                                 setTrackerName[trackingIdAssign]["timekeeping"] = True
                                 x, y, w, h = drawFaceCoordinate(frame, arrDetection[trackingIdAssign])
@@ -363,13 +331,12 @@ def videoCapture():
                     text = "timeChecked < 3"
                     x, y, w, h = drawFaceCoordinate(frame, arrDetection[trackingIdAssign])
                     getNameFace(originalFrame[y:h, x:w], trackingIdAssign)
-                    setTrackerName[trackingIdAssign]["timeChecked"] += 0.3
+                    setTrackerName[trackingIdAssign]["timeChecked"] += 0.25
 
                 checkTimeRecognition = datetime.now()
 
                 print(f"{text}: {arrTrackerId} - {trackingIdAssign}")
-            
-            print(f"end: {datetime.now()}")
+
             labels = [
                 f"# {tracker_id} {setTrackerName[tracker_id]['name']} {confidence:0.2f}" if tracker_id in setTrackerName else f"# {tracker_id} Unknown {confidence:0.2f}"
                 for confidence, tracker_id
@@ -382,8 +349,29 @@ def videoCapture():
         end = time.time() 
         totalTime = end - start
 
-        fps = 1 / totalTime
-        cv2.putText(annotatedFrame, f'FPS: {int(fps)} inputRFID:{inputRFID} trackingIdAssign: {trackingIdAssign}', (20,40), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0,255,0), 2)
+        fps = int(1 / totalTime)
+        if fps not in arrayFPS:
+            arrayFPS.append(fps)
+        minFPS = min(arrayFPS)
+        maxFPS = max(arrayFPS)
+        avgFPS = sum(arrayFPS) / len(arrayFPS) if arrayFPS else 0
+
+        text = f'FPS: {fps} maxFPS:{maxFPS} avgFPS:{int(avgFPS)} minFPS:{minFPS} trackingId: {trackingIdAssign}'
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale, thickness = 0.8, 2
+        textColor, bgColor = color.White, (167, 80, 167)
+
+        (textWidth, textHeight), _ = cv2.getTextSize(text, font, scale, thickness)
+        x, y = 30, 30
+
+        cv2.rectangle(annotatedFrame, (x - 10, y - textHeight - 10), (x + textWidth + 10, y + 10), bgColor, -1)
+
+        cv2.putText(annotatedFrame, text, (x, y), font, scale, textColor, thickness)
+
+        # cv2.rectangle(annotatedFrame, (10, 10), (500, 50), (128, 0, 128), -1)
+
+        # cv2.putText(annotatedFrame, f'FPS: {fps} maxFPS:{maxFPS} avgFPS:{int(avgFPS)} minFPS:{minFPS} trackingId: {trackingIdAssign}', (20,30), cv2.FONT_HERSHEY_SIMPLEX, 1, color.Olive, 2)
+        
         cv2.imshow("ByteTrack", annotatedFrame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
