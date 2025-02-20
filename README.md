@@ -19,6 +19,60 @@ Datasets and Accuracy
 
 Dataset Breakdown by Capture Angles and Performance:
 
+Setup camera:
+
+    VIDEO
+    - Video type: Phát video
+    - Resolution: 1280*720P
+    - Bitrate type: Không thay đổi
+    - Image Quality: Cao nhất
+    - Video frame rate(fps): 30
+    - Maximum bit rate: 8192Kbps
+    - Video encoding: H.264
+    - H.264+: Off
+    - File: Cao
+    - I-Frame Interval: 150
+    - SVC: Bật
+    - Smooth: 50
+
+    IMAGE
+    - Adjust photos
+        - Brightness: 50
+        - Contrast: 50
+        - Saturation: 50
+        - Sharpness: 50
+
+    - Contact settings
+        - Iris mode: Permanent
+        - Anti-striping: Off
+        - Exposure time: 1/30
+    
+    - Day/night switch
+        - Day/night switch: Auto
+        - Sensitivity: 4
+        - Filter time: 5
+        - Add smart lighting: Off
+        - Light supplement mode: Smart
+        - Control the brightness of the light: Auto
+        - IR light: 100
+        - White light: 100
+
+    - Backlighting
+        - BLC Area: Off
+        - WDR: Off
+        - HLC: Off
+
+    - White balance
+        - White balance: Auto white balance 2/AWB2
+
+    - Image Enhancement
+        - Digital noise reduction: Expert mode
+        - DNR level range: 50
+        - DNR time level: 50
+        - Cover mode: Auto
+        - Gray Area: [0-255]
+
+
 Round 1:
 
     4 angles (240 images):
