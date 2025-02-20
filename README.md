@@ -22,17 +22,17 @@ Dataset Breakdown by Capture Angles and Performance:
 Setup camera:
 
     VIDEO
-    - Video type: Phát video
+    - Video type: Play videos
     - Resolution: 1280*720P
-    - Bitrate type: Không thay đổi
-    - Image Quality: Cao nhất
+    - Bitrate type: Constant
+    - Image Quality: Highest
     - Video frame rate(fps): 30
     - Maximum bit rate: 8192Kbps
     - Video encoding: H.264
     - H.264+: Off
     - File: Cao
     - I-Frame Interval: 150
-    - SVC: Bật
+    - SVC: On
     - Smooth: 50
 
     IMAGE
