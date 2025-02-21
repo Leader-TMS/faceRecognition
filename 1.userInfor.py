@@ -174,7 +174,7 @@ from pathlib import Path
 from PIL import Image, ImageTk
 import cv2
 from datetime import datetime
-from HeadPoseEstimation import cameraForward
+from HeadPoseEstimation import cameraForward, resetData
 import os
 from dataProcessing import getEmployeesByCode
 
@@ -205,11 +205,8 @@ def openCamera(vid, labelWidget):
     labelWidget.after(25, openCamera, vid, labelWidget)
 
 def toggleCapture():
-    global captureFlag, buttonImage2
     if captureFlag:
         stopCapture()
-        buttonImage2 = PhotoImage(file=relativeToAssets("button_2.png"))
-        button2.config(image=buttonImage2)
         # startButton.config(text="Bắt đầu (chụp hình)")
     else:
         startCapture()  # Bắt đầu chụp ảnh
@@ -236,7 +233,10 @@ def startCapture():
         os.makedirs(folderPath)
 
 def stopCapture():
-    global captureFlag
+    global captureFlag, buttonImage2
+    resetData()
+    buttonImage2 = PhotoImage(file=relativeToAssets("button_2.png"))
+    button2.config(image=buttonImage2)
     captureFlag = False
     print("Stopped capturing images.")
 
@@ -398,7 +398,7 @@ image6 = canvas.create_image(
 )
 
 nameId = canvas.create_text(
-    705.0, 156.0, anchor="nw", text="Phạm Ngọc Minh", fill="#575757", font=("Amiko-Bold", 14 * -1)
+    695.0, 156.0, anchor="nw", text="Nhập mã nhân viên", fill="#575757", font=("Amiko-Bold", 14 * -1)
 )
 
 imageImage7 = PhotoImage(

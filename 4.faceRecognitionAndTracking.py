@@ -24,17 +24,20 @@ from PIL import Image
 # Setup Yolo and Yolo Face
 # model = YOLO("yolo/yolo11m.pt")
 # model.verbose = False
-tracker = sv.ByteTrack()
-boundingBoxAnnotator = sv.BoxAnnotator()
-labelAnnotator = sv.LabelAnnotator()
 # -------------------------------------
 modelFace = YOLO("yolo/yolov11s-face.pt")
 modelFace.verbose = False
-mtcnn = MTCNN(keep_all = True, thresholds=[0.5, 0.6, 0.6])
 
-inception_model = InceptionResnetV1(pretrained='vggface2').eval()
-svm_model = joblib.load('svmModel.pkl')
-label_encoder = joblib.load('labelEncoder.pkl')
+class_colors = sv.ColorPalette.from_hex(['#ffff66'])
+tracker = sv.ByteTrack()
+boundingBoxAnnotator = sv.BoxAnnotator(thickness=2, color=class_colors)
+labelAnnotator = sv.LabelAnnotator(color=class_colors, text_color=sv.Color.from_hex("#000000"))
+# mtcnn = MTCNN(keep_all = True, thresholds=[0.5, 0.6, 0.6])
+mtcnn = MTCNN(keep_all = True, thresholds=[0.7, 0.8, 0.8])
+
+inceptionModel = InceptionResnetV1(pretrained='vggface2').eval()
+svmModel = joblib.load('svmModel.pkl')
+labelEncoder = joblib.load('labelEncoder.pkl')
 
 # Setup Camera
 devs = os.listdir('/dev')
@@ -91,7 +94,7 @@ def textToSpeech(text, speed=1.0):
         if speed != 1.0:
             audio = audio.speedup(playback_speed=speed)
 
-        play(audio)
+        # play(audio)
         
     thread = threading.Thread(target=generateAndPlayAudio)
     thread.daemon=True
@@ -153,28 +156,39 @@ def faceAuthentication(frame):
                 frame = cv2.resize(frame, (wFace, hFace), interpolation=cv2.INTER_LANCZOS4)
             
             if wFace >= targetWFace:
-                faces_mtcnn = mtcnn(frame)
-                if faces_mtcnn is not None and len(faces_mtcnn) > 0:
-                    for i, face in enumerate(faces_mtcnn):
-                        embedding = inception_model(face.unsqueeze(0)).detach().numpy().flatten()
+                faceMtcnn = mtcnn(frame)
+                if faceMtcnn is not None and len(faceMtcnn) > 0:
+                    for i, face in enumerate(faceMtcnn):
+                        embedding = inceptionModel(face.unsqueeze(0)).detach().numpy().flatten()
                         # embedding = np.array([embedding])
                         embedding = normalize([embedding])
-                        label_index = svm_model.predict(embedding)[0]
-                        prob = svm_model.predict_proba(embedding)[0]
-                        prob_percent = prob[label_index] * 100
-                        print(f"prob_percent: {prob_percent}")
-                        if prob_percent >= 90:
-                            employeeCode = label_encoder.inverse_transform([label_index])[0]
+                        # print(f"embedding: {embedding}")
+                        labelIndex = svmModel.predict(embedding)[0]
+                        print(f"labelIndex: {labelIndex}")
+                        prob = svmModel.predict_proba(embedding)[0]
+                        print(f"prob: {prob}")
+                        probPercent = prob[labelIndex] * 100
+                        print(f"[{i}] probPercent: {probPercent if probPercent >= 70 else 0}")
+                        if probPercent >= 75:
+                            employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
                             employeeCode = getEmployeesByCode(employeeCode)
                             if employeeCode:
                                 label = employeeCode['full_name']
                                 employeeCode = employeeCode['employee_code']
+                        else:
+                            employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
+                            employeeCode = getEmployeesByCode(employeeCode)
+                            if employeeCode:
+                                print(f"Gần giống: {employeeCode['full_name']}")
+                            label = "Unknown"
+                            employeeCode = None
     except RuntimeError as e:
             print(f"Warning: {e}. Skipping this face region.")
     return label, employeeCode
 
 def getNameFace(frame = None, trackerId = None):
     if frame is not None and frame.size > 0:
+        print(f"getNameFace: {trackerId}")
         trackerName, employeeCode = faceAuthentication(frame)
         if isinstance(trackerName, str) and trackerName != "Unknown":
             setTrackerName[trackerId]["name"] = trackerName
@@ -184,7 +198,7 @@ def getNameFace(frame = None, trackerId = None):
             setTrackerName[trackerId]["name"] = "Unknown"
             setTrackerName[trackerId]["employeeCode"] = None
             setTrackerName[trackerId]["Unknown"] = setTrackerName[trackerId]["Unknown"] + 1 
-        print(f"setTrackerName: {trackerId, setTrackerName[trackerId]}") 
+        # print(f"setTrackerName: {trackerId, setTrackerName[trackerId]}") 
 
 def scanRFID():
     global inputRFID, seeRFID
@@ -224,7 +238,6 @@ def findNextLarger(arrTrackerId, trackingIdAssign):
 def delAndFindNextLarger(arrTrackerId, trackingIdAssign):
     if trackingIdAssign in setTrackerName:
         del setTrackerName[trackingIdAssign]
-        print(f"delAndFindNextLarger: {trackingIdAssign}")
     return findNextLarger(arrTrackerId, trackingIdAssign)
 
 def videoCapture():
@@ -232,6 +245,7 @@ def videoCapture():
 
     rtsp = "rtsp://admin:bvTTDCaps999@192.168.40.38:554/cam/realmonitor?channel=1&subtype=0"
     video = "output_video.avi"
+    video2 = "output_video2.avi"
     cap = cv2.VideoCapture(rtsp)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
@@ -250,7 +264,8 @@ def videoCapture():
         results = modelFace(frame)[0]
 
         detections = sv.Detections.from_ultralytics(results)
-        detections = detections[detections.confidence >= 0.8]
+        # detections = annotate_frame(frame, detections, bbox_annotator, label_annotator, class_names_dict)
+        detections = detections[detections.confidence >= 0.75]
         detections = detections[detections.class_id == 0]
 
         scaleFactor = 0.02  # 5%
@@ -314,7 +329,6 @@ def videoCapture():
                         if setTrackerName[trackingIdAssign]["name"] != "Unknown":
                             text = "name is not Unknown"
                             percentage = round((setTrackerName[trackingIdAssign]['Unknown'] / setTrackerName[trackingIdAssign]['Known']) * 100, 2)
-                            print(f"percentage: {percentage}")
                             if percentage <= 34:
                                 text = "percentage < 20"
                                 setTrackerName[trackingIdAssign]["timekeeping"] = True
@@ -335,7 +349,7 @@ def videoCapture():
 
                 checkTimeRecognition = datetime.now()
 
-                print(f"{text}: {arrTrackerId} - {trackingIdAssign}")
+                # print(f"{text}: {arrTrackerId} - {trackingIdAssign}")q
 
             labels = [
                 f"# {tracker_id} {setTrackerName[tracker_id]['name']} {confidence:0.2f}" if tracker_id in setTrackerName else f"# {tracker_id} Unknown {confidence:0.2f}"
