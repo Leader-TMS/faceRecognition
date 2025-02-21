@@ -38,14 +38,14 @@ Setup camera:
     IMAGE
     - Adjust photos
         - Brightness: 50
-        - Contrast: 50
-        - Saturation: 50
-        - Sharpness: 50
+        - Contrast: 49
+        - Saturation: 55
+        - Sharpness: 65
 
     - Contact settings
         - Iris mode: Permanent
         - Anti-striping: Off
-        - Exposure time: 1/30
+        - Exposure time: 1/60
     
     - Day/night switch
         - Day/night switch: Auto
@@ -71,6 +71,11 @@ Setup camera:
         - DNR time level: 50
         - Cover mode: Auto
         - Gray Area: [0-255]
+
+    - Customize Video
+        - Mirror: Off
+        - Turn: Off
+        - Video Standard: NTSC(60HZ)
 
 
 Round 1:
