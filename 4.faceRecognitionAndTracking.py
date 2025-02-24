@@ -20,6 +20,9 @@ from pydub.playback import play
 import io
 from dataProcessing import getEmployeesByCode, getEmployeesByRFID, saveAttendance
 from PIL import Image
+import torch
+from torchvision import transforms
+import imagehash
 
 # Setup Yolo and Yolo Face
 # model = YOLO("yolo/yolo11m.pt")
@@ -73,8 +76,9 @@ userAreCheckIn = ""
 lock = threading.Lock()
 color = Color()
 checking = None
-targetWFace = 60
+targetWFace = 50
 checkTimeRecognition = datetime.now()
+imageHash = None
 trackingIdAssign = None
 
 roi_x1, roi_y1, roi_x2, roi_y2 = 250, 250, 600, 350
@@ -94,7 +98,7 @@ def textToSpeech(text, speed=1.0):
         if speed != 1.0:
             audio = audio.speedup(playback_speed=speed)
 
-        # play(audio)
+        play(audio)
         
     thread = threading.Thread(target=generateAndPlayAudio)
     thread.daemon=True
@@ -143,7 +147,7 @@ def saveFaceDirection(image, folderName):
         target_file_name = os.path.join(folderName, f'{current_time}.jpg')
         cv2.imwrite(target_file_name, image)
 
-def faceAuthentication(frame):
+def faceAuthentication(trackerId, frame):
     try:
         label = "Unknown"
         employeeCode = None
@@ -160,26 +164,18 @@ def faceAuthentication(frame):
                 if faceMtcnn is not None and len(faceMtcnn) > 0:
                     for i, face in enumerate(faceMtcnn):
                         embedding = inceptionModel(face.unsqueeze(0)).detach().numpy().flatten()
-                        # embedding = np.array([embedding])
                         embedding = normalize([embedding])
-                        # print(f"embedding: {embedding}")
                         labelIndex = svmModel.predict(embedding)[0]
-                        print(f"labelIndex: {labelIndex}")
                         prob = svmModel.predict_proba(embedding)[0]
-                        print(f"prob: {prob}")
-                        probPercent = prob[labelIndex] * 100
-                        print(f"[{i}] probPercent: {probPercent if probPercent >= 70 else 0}")
-                        if probPercent >= 75:
+                        probPercent = round(prob[labelIndex], 2)
+                        if probPercent >= 0.7:
                             employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
                             employeeCode = getEmployeesByCode(employeeCode)
                             if employeeCode:
                                 label = employeeCode['full_name']
                                 employeeCode = employeeCode['employee_code']
                         else:
-                            employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
-                            employeeCode = getEmployeesByCode(employeeCode)
-                            if employeeCode:
-                                print(f"Gần giống: {employeeCode['full_name']}")
+                            saveFaceDirection(frame, "evidences/invalid/Unknown")
                             label = "Unknown"
                             employeeCode = None
     except RuntimeError as e:
@@ -188,8 +184,7 @@ def faceAuthentication(frame):
 
 def getNameFace(frame = None, trackerId = None):
     if frame is not None and frame.size > 0:
-        print(f"getNameFace: {trackerId}")
-        trackerName, employeeCode = faceAuthentication(frame)
+        trackerName, employeeCode = faceAuthentication(trackerId, frame)
         if isinstance(trackerName, str) and trackerName != "Unknown":
             setTrackerName[trackerId]["name"] = trackerName
             setTrackerName[trackerId]["employeeCode"] = employeeCode
@@ -197,8 +192,7 @@ def getNameFace(frame = None, trackerId = None):
         else:
             setTrackerName[trackerId]["name"] = "Unknown"
             setTrackerName[trackerId]["employeeCode"] = None
-            setTrackerName[trackerId]["Unknown"] = setTrackerName[trackerId]["Unknown"] + 1 
-        # print(f"setTrackerName: {trackerId, setTrackerName[trackerId]}") 
+            setTrackerName[trackerId]["Unknown"] = setTrackerName[trackerId]["Unknown"] + 1
 
 def scanRFID():
     global inputRFID, seeRFID
@@ -240,8 +234,14 @@ def delAndFindNextLarger(arrTrackerId, trackingIdAssign):
         del setTrackerName[trackingIdAssign]
     return findNextLarger(arrTrackerId, trackingIdAssign)
 
+
+def getImageHash(image):
+    pilImage = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+    imageHash = imagehash.phash(pilImage)
+    return imageHash
+
 def videoCapture():
-    global checkTimeRecognition, trackingIdAssign
+    global checkTimeRecognition, trackingIdAssign, imageHash
 
     rtsp = "rtsp://admin:bvTTDCaps999@192.168.40.38:554/cam/realmonitor?channel=1&subtype=0"
     video = "output_video.avi"
@@ -268,12 +268,13 @@ def videoCapture():
         detections = detections[detections.confidence >= 0.75]
         detections = detections[detections.class_id == 0]
 
-        scaleFactor = 0.02  # 5%
 
-        detections.xyxy[:, 0] *= (1 - scaleFactor)
-        detections.xyxy[:, 1] *= (1 - scaleFactor)
-        detections.xyxy[:, 2] *= (1 + scaleFactor)
-        detections.xyxy[:, 3] *= (1 + scaleFactor)
+        # scaleFactor = 0.05  # 5%
+
+        # detections.xyxy[:, 0] *= (1 - scaleFactor)
+        # detections.xyxy[:, 1] *= (1 - scaleFactor)
+        # detections.xyxy[:, 2] *= (1 + scaleFactor)
+        # detections.xyxy[:, 3] *= (1 + scaleFactor)
 
         x = detections.xyxy[:, 0]
         y = detections.xyxy[:, 1]
@@ -292,6 +293,11 @@ def videoCapture():
         detections.xyxy[:, 2] = xCenter + size / 2
         detections.xyxy[:, 3] = yCenter + size / 2
 
+        # detections = detections[
+        #     (detections.xyxy[:, 2] - detections.xyxy[:, 0] >= targetWFace) &
+        #     (detections.xyxy[:, 3] - detections.xyxy[:, 1] >= targetWFace)
+        # ]
+
         detections = tracker.update_with_detections(detections)
         arrDetection = {}
         if len(detections):
@@ -304,57 +310,58 @@ def videoCapture():
                 checkPointLine = 1
                 if checkPointLine > 0:
                     arrDetection[trackerId] = detection
-
-            if len(arrDetection) and checkTime(checkTimeRecognition, 0.1):
-                text = ""
+            if len(arrDetection) and checkTime(checkTimeRecognition, 0.2):
                 arrTrackerId = sorted(arrDetection.keys()) if arrDetection is not None else []
                 if trackingIdAssign is None:
-                    text = "trackingIdAssign is None"
                     trackingIdAssign = min(arrTrackerId, default=None)
                     
                 if trackingIdAssign not in arrTrackerId:
-                    text = "trackingIdAssign not in arrTrackerId"
                     trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
 
                 if trackingIdAssign not in setTrackerName:
                     setTrackerName[trackingIdAssign] = {"name": "Unknown", "employeeCode": None, "Unknown": 0, "Known": 0, "authenticate": "", "timekeeping": False, "timeChecked": 0, "timer": datetime.now(), "time": datetime.now()}
                 
                 if setTrackerName[trackingIdAssign]["timeChecked"] >= 1:
-                    text = "timeChecked >= 3"
                     if setTrackerName[trackingIdAssign]["timekeeping"]:
-                        text = "timekeeping is True"
                         trackingIdAssign = findNextLarger(arrTrackerId, trackingIdAssign)
                     else:
-                        text = "timekeeping is False"
                         if setTrackerName[trackingIdAssign]["name"] != "Unknown":
-                            text = "name is not Unknown"
                             percentage = round((setTrackerName[trackingIdAssign]['Unknown'] / setTrackerName[trackingIdAssign]['Known']) * 100, 2)
-                            if percentage <= 34:
-                                text = "percentage < 20"
+                            if percentage <= 25:
                                 setTrackerName[trackingIdAssign]["timekeeping"] = True
                                 x, y, w, h = drawFaceCoordinate(frame, arrDetection[trackingIdAssign])
                                 updateInfo({setTrackerName[trackingIdAssign]['employeeCode']: originalFrame[y:h, x:w]})
                                 trackingIdAssign = findNextLarger(arrTrackerId, trackingIdAssign)
                             else:
-                                text = "percentage >= 20"
                                 trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
                         else:
-                            text = "name is Unknown"
                             trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
                 else:
-                    text = "timeChecked < 3"
+                    isOther = False
                     x, y, w, h = drawFaceCoordinate(frame, arrDetection[trackingIdAssign])
-                    getNameFace(originalFrame[y:h, x:w], trackingIdAssign)
-                    setTrackerName[trackingIdAssign]["timeChecked"] += 0.25
+                    dataHash = getImageHash(originalFrame[y:h, x:w])
+                    if imageHash is None:
+                        imageHash = dataHash
+                        isOther = True
+                    else:
+                        if imageHash != dataHash:
+                            imageHash = dataHash
+                            isOther = True
+                        elif setTrackerName[trackingIdAssign]["name"] != "Unknown":
+                            setTrackerName[trackingIdAssign]["Known"] = setTrackerName[trackingIdAssign]["Known"] + 1
+                        else:
+                            setTrackerName[trackingIdAssign]["Unknown"] = setTrackerName[trackingIdAssign]["Unknown"] + 1
+                    
+                    if isOther:
+                        getNameFace(originalFrame[y:h, x:w], trackingIdAssign)
+                    setTrackerName[trackingIdAssign]["timeChecked"] += 0.2
 
                 checkTimeRecognition = datetime.now()
 
-                # print(f"{text}: {arrTrackerId} - {trackingIdAssign}")q
-
             labels = [
-                f"# {tracker_id} {setTrackerName[tracker_id]['name']} {confidence:0.2f}" if tracker_id in setTrackerName else f"# {tracker_id} Unknown {confidence:0.2f}"
-                for confidence, tracker_id
-                in zip(detections.confidence, detections.tracker_id)
+                f"# {tracker_id} {setTrackerName[tracker_id]['name']} {confidence:0.2f} {xyxy[2] - xyxy[0]}px" if tracker_id in setTrackerName else f"# {tracker_id} Unknown {confidence:0.2f} {xyxy[2] - xyxy[0]}px"
+                for confidence, tracker_id, xyxy
+                in zip(detections.confidence, detections.tracker_id, detections.xyxy)
             ]
             annotatedFrame = boundingBoxAnnotator.annotate(scene=frame, detections=detections)
             annotatedFrame = labelAnnotator.annotate(scene=annotatedFrame, detections=detections, labels=labels)
