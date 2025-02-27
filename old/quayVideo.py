@@ -1,7 +1,7 @@
 import cv2
 rtsp = "rtsp://admin:bvTTDCaps999@192.168.40.38:554/cam/realmonitor?channel=1&subtype=0"
 
-cap = cv2.VideoCapture(rtsp)
+cap = cv2.VideoCapture(0)
 
 if not cap.isOpened():
     print("Không thể kết nối tới RTSP stream")
