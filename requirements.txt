@@ -21,17 +21,22 @@ joblib==1.4.2
 scikit-learn==1.6.0
 supervision==0.25.1
 # supervision==0.13.0
-opencv-contrib-python==4.10.0.84
+# opencv-contrib-python==4.10.0.84
 configparser==7.1.0
 filterpy==1.4.5
 torch==2.2.2
 torchvision==0.17.2
 ImageHash==4.3.1
 mediapipe==0.10.11
+# for Raspberry Pi
+# mediapipe==0.10.9
 readchar==4.2.1
 pyttsx3==2.98
 gtts==2.5.4
 pydub==0.25.1
 mysql-connector-python== 9.0.0
 imutils==0.5.4
+#for MultiTracker_create
+opencv-python==4.4.0.46
+opencv-contrib-python==4.4.0.46
 # https://github.com/hanifabd/realtime-head-pose-detection/blob/master/app.py
