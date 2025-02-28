@@ -2,7 +2,6 @@ import cv2
 import mediapipe as mp
 import time
 import numpy as np
-import face_recognition
 import os
 from datetime import datetime, timedelta
 
@@ -15,7 +14,7 @@ trackers = {}
 rtsp = "rtsp://admin:bvTTDCaps999@192.168.40.38:554/cam/realmonitor?channel=1&subtype=0"
 video = "output_video2.avi"
 # cap = cv2.VideoCapture(2, cv2.CAP_FFMPEG)
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(2)
 arrayFPS = []
 # trackers = cv2.MultiTracker_create()
 test = 0
@@ -160,7 +159,7 @@ while cap.isOpened():
             p1 = (int(bbox[0]), int(bbox[1]))
             p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
 
-            cv2.putText(frame, f'trackingId: {key}', (int(bbox[0]), int(bbox[1] * 0.9)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1.5)
+            cv2.putText(frame, f'trackingId: {key}', (int(bbox[0]), int(bbox[1] * 0.9)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
             cv2.rectangle(frame, p1, p2, (0, 255, 0), 2)
         else:
             print(f"Tracker for face {key} lost!")

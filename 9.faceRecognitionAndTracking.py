@@ -10,12 +10,9 @@ mpFaceDetection = mp.solutions.face_detection
 faceDetection = mpFaceDetection.FaceDetection(min_detection_confidence=0.5, model_selection=1)
 mpDrawing = mp.solutions.drawing_utils
 
-rtsp = "rtsp://admin:bvTTDCaps999@192.168.40.38:554/cam/realmonitor?channel=1&subtype=0"
 video = "output_video2.avi"
-# cap = cv2.VideoCapture(2, cv2.CAP_FFMPEG)
-cap = cv2.VideoCapture(2)
+cap = cv2.VideoCapture(video)
 arrayFPS = []
-
 
 while cap.isOpened():
     start =  time.time()
