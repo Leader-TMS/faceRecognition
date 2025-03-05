@@ -1,5 +1,6 @@
 import sqlite3
 from datetime import datetime
+import requests
 
 def getEmployeesByCode(employeeCode):
     conn = sqlite3.connect('employee.db')
@@ -35,29 +36,43 @@ def getEmployeesByRFID(rfid):
 
     return employee
 
-def saveAttendance(employeeCode):
-    conn = sqlite3.connect('employee.db')
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-
-    cursor.execute('''
-        SELECT id FROM employees 
-        WHERE employee_code = ? AND deleted_at IS NULL
-        LIMIT 1
-    ''', (employeeCode,))
-
-    employee = cursor.fetchone()
-    if employee:
-        employeeId = employee['id']
-        createdAt = updatedAt = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+def saveAttendance(checkBy, employeeCode, uniqueId):
+    try:
+        conn = sqlite3.connect('employee.db')
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
 
         cursor.execute('''
-            INSERT INTO attendance (employee_id, created_at, updated_at, deleted_at)
-            VALUES (?, ?, ?, ?)
-        ''', (employeeId, createdAt, updatedAt, None)) 
+            SELECT id FROM employees 
+            WHERE employee_code = ? AND deleted_at IS NULL
+            LIMIT 1
+        ''', (employeeCode,))
 
-    conn.commit()
-    conn.close()
+        employee = cursor.fetchone()
+        if employee:
+            employeeId = employee['id']
+            createdAt = updatedAt = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            cursor.execute('''
+                INSERT INTO attendance (employee_id, created_at, updated_at, deleted_at)
+                VALUES (?, ?, ?, ?)
+            ''', (employeeId, createdAt, updatedAt, None)) 
+            conn.commit()
+            conn.close()
+
+            url = 'http://api.tanthanhdat.local/api/post/run/job/save-attendance-job'
+            dataSave = {
+                "employee_id": employeeId,
+                "face_check_in": 1 if checkBy == "face" else 0,
+                "rfid_check_in": 0 if checkBy == "face" else 1,
+                "creator_id": 1,
+                "unique_id": uniqueId
+            }
+
+            requests.post(url, data = dataSave)
+    except Exception as e:
+        return False
+    return True
 
 if __name__ == "__main__":
     conn = sqlite3.connect('employee.db')

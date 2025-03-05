@@ -40,11 +40,17 @@ import configparser
 config = configparser.ConfigParser()
 config.read('config.ini')
 
-host = config['settingMySQL']["HOST"]
-port = config['settingMySQL']["PORT"]
-user = config['settingMySQL']["USER"]
-password = config['settingMySQL']["PASSWORD"]
-database = config['settingMySQL']["DATABASE"]
+# host = config['settingMySQL']["HOST"]
+# port = config['settingMySQL']["PORT"]
+# user = config['settingMySQL']["USER"]
+# password = config['settingMySQL']["PASSWORD"]
+# database = config['settingMySQL']["DATABASE"]
+
+host = config['stagingSettingMySQL']["HOST"]
+port = config['stagingSettingMySQL']["PORT"]
+user = config['stagingSettingMySQL']["USER"]
+password = config['stagingSettingMySQL']["PASSWORD"]
+database = config['stagingSettingMySQL']["DATABASE"]
 
 conn = mysql.connector.connect(
     host=host,
