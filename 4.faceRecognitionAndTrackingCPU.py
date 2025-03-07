@@ -1,17 +1,13 @@
-from multiprocessing import Queue, Process
+
 import cv2
 import mediapipe as mp
-import time
-import supervision as sv
 from facenet_pytorch import MTCNN, InceptionResnetV1
 from sklearn.preprocessing import normalize
 import joblib
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 import os
 os.environ['YOLO_VERBOSE'] = 'False'
-from ultralytics import YOLO
-import json
 import threading
 from readchar import readkey, key
 from gtts import gTTS
@@ -21,26 +17,13 @@ import io
 from dataProcessing import getEmployeesByCode, getEmployeesByRFID, saveAttendance
 from PIL import Image
 import torch
-from torchvision import transforms
 import imagehash
 import configparser
 import random
 import string
+import sys
 
-# Setup Yolo and Yolo Face
-# model = YOLO("yolo/yolo11m.pt")
-# model.verbose = False
-# -------------------------------------
-# modelFace = YOLO("yolo/yolov11s-face.pt")
-# modelFace.verbose = False
-
-class_colors = sv.ColorPalette.from_hex(['#ffff66'])
-tracker = sv.ByteTrack()
-boundingBoxAnnotator = sv.BoxAnnotator(thickness=2, color=class_colors)
-labelAnnotator = sv.LabelAnnotator(color=class_colors, text_color=sv.Color.from_hex("#000000"))
-# mtcnn = MTCNN(keep_all = True, thresholds=[0.5, 0.6, 0.6])
 mtcnn = MTCNN(keep_all = True, thresholds=[0.7, 0.8, 0.8])
-
 inceptionModel = InceptionResnetV1(pretrained='vggface2').eval()
 svmModel = joblib.load('svmModel.pkl')
 labelEncoder = joblib.load('labelEncoder.pkl')
@@ -52,7 +35,7 @@ devVideo = sorted(devVideo)[::2]
 
 #Setup mediapipe
 mpFaceDetection = mp.solutions.face_detection
-faceDetection = mpFaceDetection.FaceDetection(min_detection_confidence=0.8, model_selection=1)
+faceDetection = mpFaceDetection.FaceDetection(min_detection_confidence=0.8, model_selection=0)
 mpDrawing = mp.solutions.drawing_utils
 
 class Color:
@@ -83,7 +66,6 @@ inputRFID = ""
 userAreCheckIn = ""
 lock = threading.Lock()
 color = Color()
-checking = None
 targetWFace = 50
 checkTimeRecognition = datetime.now()
 imageHash = None
@@ -182,7 +164,7 @@ def faceAuthentication(frame):
                         labelIndex = svmModel.predict(embedding)[0]
                         prob = svmModel.predict_proba(embedding)[0]
                         probPercent = round(prob[labelIndex], 2)
-                        if probPercent >= 0.7:
+                        if probPercent >= 0.75:
                             employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
                             employeeCode = getEmployeesByCode(employeeCode)
                             if employeeCode:
@@ -235,7 +217,7 @@ def scanRFID():
 
 def drawFaceCoordinate(frame, detection):
     x, y, w, h = detection
-    cv2.putText(frame, f'getNameFace', (x, y - 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
+    cv2.putText(frame, f'Authentication', (x, y - 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
     return x, y, w, h
 
 def checkTime(savedTime, second = 0.3):
@@ -339,28 +321,34 @@ def genUniqueId(length=20):
     return unique_id
 
 def videoCapture():
-    global checkTimeRecognition, trackingIdAssign, imageHash
+    global checkTimeRecognition, trackingIdAssign, imageHash, setTrackerName, trackers, prev_frame_time, new_frame_time
 
     rtsp = f"rtsp://{user}:{password}@{ip}:{port}/cam/realmonitor?channel=1&subtype=0"
     video = "output_video.avi"
     video2 = "output_video2.avi"
     video3 = "6863054282731021257.mp4"
-    cap = cv2.VideoCapture(rtsp)
+    cap = cv2.VideoCapture(video3)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     cap.set(cv2.CAP_PROP_FPS, 60)
     fps = cap.get(cv2.CAP_PROP_FPS)
-    arrayFPS = []
-    while cap.isOpened():
-        start =  time.time()
+    second = 0
+    countSecond = 0
+    if not cap.isOpened():
+        textToSpeech("Không thể mở máy ảnh")
+        exit()
+
+    while True:
         ret, frame = cap.read()
         if not ret:
             break
 
         originalFrame = frame.copy()
-        cv2.polylines(frame, [points], isClosed=True, color=(0, 255, 0), thickness=2)
+        # cv2.polylines(frame, [points], isClosed=True, color=(0, 255, 0), thickness=2)
+
         detections = detectionAndTracking(frame)
         arrDetection = {}
+
         if len(detections):
             for key, (bbox) in list(detections.items()):
 
@@ -371,7 +359,7 @@ def videoCapture():
                 h = y + h
 
                 topPoint = int((x + w) / 2)
-                cv2.circle(frame, (topPoint, h), 3, color.Red, -1)
+                # cv2.circle(frame, (topPoint, h), 3, color.Red, -1)
                 checkPointLine = cv2.pointPolygonTest(points, (topPoint, h), False)
                 checkPointLine = 1
                 if checkPointLine > 0:
@@ -387,7 +375,7 @@ def videoCapture():
                 if trackingIdAssign not in setTrackerName:
                     setTrackerName[trackingIdAssign] = {"name": "Unknown", "employeeCode": None, "Unknown": 0, "Known": 0, "authenticate": "", "timekeeping": False, "timeChecked": 0, "timer": datetime.now(), "time": datetime.now()}
                 
-                if setTrackerName[trackingIdAssign]["timeChecked"] >= 1:
+                if setTrackerName[trackingIdAssign]["timeChecked"] >= 0.5:
                     if setTrackerName[trackingIdAssign]["timekeeping"]:
                         trackingIdAssign = findNextLarger(arrTrackerId, trackingIdAssign)
                     else:
@@ -395,7 +383,7 @@ def videoCapture():
                             percentage = round((setTrackerName[trackingIdAssign]['Unknown'] / setTrackerName[trackingIdAssign]['Known']) * 100, 2)
                             if percentage <= 25:
                                 setTrackerName[trackingIdAssign]["timekeeping"] = True
-                                x, y, w, h = drawFaceCoordinate(frame, arrDetection[trackingIdAssign])
+                                x, y, w, h = arrDetection[trackingIdAssign]
                                 updateInfo({setTrackerName[trackingIdAssign]['employeeCode']: originalFrame[y:y+h, x:x+w]})
                                 trackingIdAssign = findNextLarger(arrTrackerId, trackingIdAssign)
                             else:
@@ -404,7 +392,7 @@ def videoCapture():
                             trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
                 else:
                     isOther = False
-                    x, y, w, h = drawFaceCoordinate(frame, arrDetection[trackingIdAssign])
+                    x, y, w, h = arrDetection[trackingIdAssign]
                     dataHash = getImageHash(originalFrame[y:y+h, x:x+w])
                     if imageHash is None:
                         imageHash = dataHash
@@ -425,23 +413,30 @@ def videoCapture():
             for key, (bbox) in list(detections.items()):
                 x, y, w, h = bbox
                 trackerName = "Unknown"
+                isPass = False
                 if key in setTrackerName:
-                    trackerName = setTrackerName[key]["name"]
+                    isPass = setTrackerName[key]["timekeeping"]
+                    if isPass:
+                        trackerName = "Successful"
+                    else:
+                        trackerName = setTrackerName[key]["name"]
                         
-                cv2.putText(frame, f'# {key} {trackerName}', (x, int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.5, (0, 255, 0), 2)
+                cv2.putText(frame, f'# {key} {trackerName}', (x, int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.65, (0, 255, 0), 2)
                 cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        else:
+            trackers = {}
+            setTrackerName = {}
+            trackingIdAssign = None
+            imageHash = None
 
-        end = time.time() 
-        totalTime = end - start
-
-        fps = int(1 / totalTime)
-        if fps not in arrayFPS:
-            arrayFPS.append(fps)
-        minFPS = min(arrayFPS)
-        maxFPS = max(arrayFPS)
-        avgFPS = sum(arrayFPS) / len(arrayFPS) if arrayFPS else 0
-
-        text = f'FPS: {fps} maxFPS:{maxFPS} avgFPS:{int(avgFPS)} minFPS:{minFPS} trackingId: {trackingIdAssign}'
+        if second != datetime.now().second:
+            second = datetime.now().second
+            if countSecond != 0:
+                fps = countSecond
+            countSecond = 1
+        else:
+            countSecond+=1
+        text = f'FPS: {fps} trackingId: {trackingIdAssign}'
         font = cv2.FONT_HERSHEY_SIMPLEX
         scale, thickness = 0.8, 2
         textColor, bgColor = color.White, (167, 80, 167)
@@ -451,9 +446,14 @@ def videoCapture():
 
         cv2.rectangle(frame, (x - 10, y - textHeight - 10), (x + textWidth + 10, y + 10), bgColor, -1)
         cv2.putText(frame, text, (x, y), font, scale, textColor, thickness)
-
+        for name in [name for name in locals() if name not in ['self', 'request', 'response', 'app', '__name__']]:
+            if locals()[name] is not None:
+                memory_size = sys.getsizeof(locals()[name])
+                print(f"Variable '{name}' is using {memory_size} bytes of memory.")
+                # del locals()[name]
+        print("------------------------------------")
         cv2.imshow("ByteTrack", frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        if cv2.waitKey(10) & 0xFF == ord('q'):
             break
 
     cap.release()

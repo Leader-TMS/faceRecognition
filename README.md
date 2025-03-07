@@ -19,6 +19,11 @@ Datasets and Accuracy
 
 Dataset Breakdown by Capture Angles and Performance:
 
+Training time:
+    - 1 second = 23 photos
+    - Number of photos:  300 (People) * 100 (photos) = 30,000
+    => Estimate 21 minute
+    
 Setup camera:
 
     VIDEO
