@@ -12,3 +12,6 @@
 /output_video2.avi
 /config.ini
 /RaspberryPi
+/svmModel.pkl
+/labelEncoder.pkl
+/config.ini
