@@ -16,7 +16,6 @@ def getEmployeesByCode(employeeCode):
     employee = cursor.fetchone()
 
     conn.close()
-
     return employee
 
 def getEmployeesByRFID(rfid):
@@ -107,7 +106,9 @@ if __name__ == "__main__":
         ('010', 'RF004', 'Phạm Trần Anh Tuấn', '2003-04-04', 'M', 'tuananh4403@gmail.com', '0123344556', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
         ('011', 'RF004', 'Nguyễn Lê Chi', '2003-01-08', 'F', 'nguyenlchi220602@gmail.com', '0123344556', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
         ('012', 'RF004', 'Nguyễn Vũ Luân', '2001-03-04', 'M', 'ngtranvuluan@gmail.com', '0123344556', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
-        ('013', 'RF004', 'Huỳnh Khánh Tuyên', '2004-05-25', 'F', 'daolam1568@gmail.com', '0123344556', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None)
+        ('013', 'RF004', 'Huỳnh Khánh Tuyên', '2004-05-25', 'F', 'daolam1568@gmail.com', '0123344556', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
+        ('014', 'RF004', 'Nguyễn Văn Hiếu', '2004-05-25', 'M', 'hieunguyen130701iuh@gmail.com', '0123344556', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
+        ('015', 'RF004', 'Trần Mạc Anh Tuyên', '2004-05-25', 'M', 'acetuhoang@gmail.com', '0123344556', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
     ]
 
     cursor.executemany('''
@@ -126,7 +127,7 @@ if __name__ == "__main__":
         )
     ''')
 
-    sql = "SELECT * FROM attendance"
+    sql = "SELECT * FROM employees"
     recs = cursor.execute(sql)
     for row in recs:
         print(row)

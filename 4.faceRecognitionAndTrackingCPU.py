@@ -5,14 +5,14 @@ from facenet_pytorch import MTCNN, InceptionResnetV1
 from sklearn.preprocessing import normalize
 import joblib
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 os.environ['YOLO_VERBOSE'] = 'False'
 import threading
 from readchar import readkey, key
 from gtts import gTTS
 from pydub import AudioSegment
-from pydub.playback import play
+from pydub.playback import play, _play_with_ffplay
 import io
 from dataProcessing import getEmployeesByCode, getEmployeesByRFID, saveAttendance
 from PIL import Image
@@ -21,9 +21,13 @@ import imagehash
 import configparser
 import random
 import string
-import sys
-
-mtcnn = MTCNN(keep_all = True, thresholds=[0.7, 0.8, 0.8])
+from skimage.metrics import structural_similarity as ssim
+from tempfile import NamedTemporaryFile
+import subprocess
+import signal
+import time
+import queue
+mtcnn = MTCNN(margin=40, select_largest=False, selection_method='probability', keep_all=True, min_face_size=40, thresholds=[0.7, 0.8, 0.8])
 inceptionModel = InceptionResnetV1(pretrained='vggface2').eval()
 svmModel = joblib.load('svmModel.pkl')
 labelEncoder = joblib.load('labelEncoder.pkl')
@@ -35,7 +39,7 @@ devVideo = sorted(devVideo)[::2]
 
 #Setup mediapipe
 mpFaceDetection = mp.solutions.face_detection
-faceDetection = mpFaceDetection.FaceDetection(min_detection_confidence=0.8, model_selection=0)
+faceDetection = mpFaceDetection.FaceDetection(min_detection_confidence=0.8, model_selection=1)
 mpDrawing = mp.solutions.drawing_utils
 
 class Color:
@@ -77,62 +81,126 @@ user = config['settingMyCamera']["USER"]
 password = config['settingMyCamera']["PASSWORD"]
 ip = config['settingMyCamera']["IP"]
 port = config['settingMyCamera']["PORT"]
+
+serverSaveError = config['settingTypeText']["SERVER_SAVE_ERROR"]
+personName = config['settingTypeText']["PERSON_NAME"]
+faceAuthError = config['settingTypeText']["FACE_AUTH_ERROR"]
+rfidNotRegistered = config['settingTypeText']["RFID_NOT_REGISTERED"]
+faceTooSmall = config['settingTypeText']["FACE_TOO_SMALL"]
+cameraOpenError = config['settingTypeText']["CAMERA_OPEN_ERROR"]
+imageUnclear = config['settingTypeText']["IMAGE_UNCLEAR"]
+
 reading= False
 roi_x1, roi_y1, roi_x2, roi_y2 = 250, 250, 600, 350
 points = np.array([[625, 280], [890, 280], [885, 625], [630, 635]], dtype=np.int32)
-
 points = points.reshape((-1, 1, 2))
+objTypeText = {}
+objCheckName = {}
+resetCallTTS = datetime.now()
+stopThread = False
 
-def textToSpeech(text, speed=1.0):
-    def generateAndPlayAudio():
-        global reading
-        reading = True
-        tts = gTTS(text=text, lang='vi', slow=False)
-        fp =io.BytesIO()
-        tts.write_to_fp(fp)
-        fp.seek(0)
+def checkKillProcess():
+    objData = list(objTypeText.items())
+    if len(objData) >= 2:
+        if not any(value is None for _, value in objData):
+            if personName in objTypeText:
+                maxKey = personName
+                maxPid = objTypeText[maxKey]
+            else:
+                maxKey = max(objTypeText, key=objTypeText.get)
+                maxPid = objTypeText[maxKey]
+            for key, pid in objData:
+                if pid != maxPid:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                        if key in objTypeText:
+                            del objTypeText[key]
+                    except ProcessLookupError:
+                        print("Process kill failed")
+                        pass
+
+def generateAndPlayAudio(text, speed, typeId):
+    global reading, objTypeText
+
+    reading = True
+    tts = gTTS(text=text, lang='vi', slow=False)
+    fp =io.BytesIO()
+    tts.write_to_fp(fp)
+    fp.seek(0)
+    
+    audio = AudioSegment.from_mp3(fp)
+
+    if speed != 1.0:
+        audio = audio.speedup(playback_speed=speed)
+
+    f = NamedTemporaryFile("w+b", suffix=".wav", delete=False)
+    audio.export(f.name, "wav")
+    process = subprocess.Popen(["ffplay", "-nodisp", "-autoexit", "-hide_banner", "-loglevel", "quiet", f.name])
+    objTypeText[typeId] = process.pid
+    checkKillProcess()
+    process.wait()
+    if typeId in objTypeText:
+        del objTypeText[typeId]
+    f.close()
+    os.remove(f.name)
         
-        audio = AudioSegment.from_mp3(fp)
+    # play(audio)
+    reading = False
+    del fp
+    del audio
+    del tts
 
-        if speed != 1.0:
-            audio = audio.speedup(playback_speed=speed)
-
-        play(audio)
-        reading = False
-
-    if reading == False:
-        thread = threading.Thread(target=generateAndPlayAudio)
+    
+def textToSpeech(text, speed=1.0, typeId = 1):
+    global reading
+    if typeId not in objTypeText:
+        objTypeText[typeId] = None
+        thread = threading.Thread(target=generateAndPlayAudio, args=(text, speed, typeId))
         thread.daemon=True
         thread.start()
 
-def updateInfo(data = {}):
-    arrUnregistered = []
-    arrRegistered = []
-    listName = []
-    for employeeCode, image in data.items():
-        if employeeCode not in data:
-            arrUnregistered.append(employeeCode)
-        else:
-            arrRegistered.append(employeeCode)
-            fullName = getEmployeesByCode(employeeCode)["full_name"]
-            listName.append(fullName)
-            saveFaceDirection(image, f"evidences/valid/{fullName}")
-            saveData = saveAttendance("face", employeeCode, genUniqueId())
-            if saveData == False:
-                textToSpeech("Lỗi lưu dữ liệu sever, Vui lòng liên hệ Admin", 1.2)
+def checkFormatTXT(objCheckName):
+    if len(objCheckName) >= 2:
+        value = ', '.join(objCheckName.values())
+    else:
+        value = next(iter(objCheckName.values()), '')
+    return value
 
-    listName = ','.join(listName)
+def waitFullName():
+    global resetCallTTS, objCheckName, stopThread
+    if stopThread:
+        stopThread = False
+    while not stopThread:
+        if checkTime(resetCallTTS, 1):
+            if len(objCheckName):
+                listName = checkFormatTXT(objCheckName)
+                if listName !=  '':
+                    print(f"Xin chào {listName} - {datetime.now().strftime('%Y-%m-%d %H-%M-%S')}")
+                    textToSpeech(f"Xin chào {listName}", 1.2, personName)
+            objCheckName = {}
+            resetCallTTS = datetime.now()
+            stopThread = False
+            break
+        time.sleep(0.1)
 
-    if len(arrRegistered):
-        textToSpeech(f"Xin chào {listName}", 1.2)
+def updateInfo(employeeCode, image):
+    global resetCallTTS, stopThread
+    fullName = getEmployeesByCode(employeeCode)["full_name"]
+    if  fullName:
+        if employeeCode not in objCheckName:
+            stopThread = True
+            resetCallTTS = datetime.now()
+            objCheckName[employeeCode] = fullName
 
-    elif len(arrUnregistered):
-        text = ""
-        if len(arrUnregistered) > 1:
-            text = f"Có {len(arrUnregistered)} mã nhân viên chưa được đăng ký trong hệ thống."
-        else:
-            text = "Mã nhân viên chưa được đăng ký trong hệ thống."
-        textToSpeech(text, 1.2)
+        thread = threading.Thread(target=waitFullName)
+        thread.daemon=True
+        thread.start()
+        saveFaceDirection(image, f"evidences/valid/{fullName}")
+        if not saveAttendance("face", employeeCode, genUniqueId()):
+            textToSpeech("Lỗi lưu dữ liệu server", 1.2)
+    else:
+        textToSpeech("Mã nhân viên chưa được đăng ký trong hệ thống.", 1.2, 8)
+        saveFaceDirection(image, "evidences/invalid")
 
 def saveFaceDirection(image, folderName):
     if  image.size > 0:
@@ -148,33 +216,41 @@ def faceAuthentication(frame):
         label = "Unknown"
         employeeCode = None
         hFace, wFace = frame.shape[:2]
-
         if frame is not None and frame.size > 0:
-            if wFace < targetWFace:
-                wFace = int(wFace * 1.45)
-                hFace = int(hFace * 1.45)
-                frame = cv2.resize(frame, (wFace, hFace), interpolation=cv2.INTER_LANCZOS4)
-            
-            if wFace >= targetWFace:
-                faceMtcnn = mtcnn(frame)
-                if faceMtcnn is not None and len(faceMtcnn) > 0:
-                    for i, face in enumerate(faceMtcnn):
-                        embedding = inceptionModel(face.unsqueeze(0)).detach().numpy().flatten()
-                        embedding = normalize([embedding])
-                        labelIndex = svmModel.predict(embedding)[0]
-                        prob = svmModel.predict_proba(embedding)[0]
-                        probPercent = round(prob[labelIndex], 2)
-                        if probPercent >= 0.75:
-                            employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
-                            employeeCode = getEmployeesByCode(employeeCode)
-                            if employeeCode:
-                                label = employeeCode['full_name']
-                                employeeCode = employeeCode['employee_code']
-                        else:
-                            saveFaceDirection(frame, "evidences/invalid")
-                            label = "Unknown"
-                            employeeCode = None
+            if wFace >= 120 and wFace <= 180:
+                wFace = int(wFace * 0.5)
+                hFace = int(hFace * 0.5)
+            elif wFace > 180:
+                wFace = int(wFace * 0.4)
+                hFace = int(hFace * 0.4)
+
+            frame = cv2.resize(frame, (wFace, hFace), interpolation=cv2.INTER_LANCZOS4)
+
+            faceRgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+            faceMtcnn = mtcnn(faceRgb)
+
+            if faceMtcnn is not None and len(faceMtcnn) > 0:
+                for i, face in enumerate(faceMtcnn):
+                    embedding = inceptionModel(face.unsqueeze(0)).detach().numpy().flatten()
+                    embedding = normalize([embedding])
+                    labelIndex = svmModel.predict(embedding)[0]
+                    prob = svmModel.predict_proba(embedding)[0]
+                    probPercent = round(prob[labelIndex], 2)
+
+                    if probPercent >= 0.75:
+                        employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
+                        employeeCode = getEmployeesByCode(employeeCode)
+                        if employeeCode:
+                            label = employeeCode['full_name']
+                            employeeCode = employeeCode['employee_code']
+                    else:
+                        saveFaceDirection(frame, "evidences/invalid")
+                        label = "Unknown"
+                        employeeCode = None
     except RuntimeError as e:
+            textToSpeech(f"Lỗi xác thực khuôn mặt", 1.2, faceAuthError)
+            saveFaceDirection(frame, "evidences/error")
             print(f"Warning: {e}. Skipping this face region.")
     finally:
         return label, employeeCode
@@ -205,20 +281,15 @@ def scanRFID():
                     employeeCode = employee['employee_code']
                     saveData = saveAttendance("rfid", employeeCode, genUniqueId())
                     if saveData == False:
-                        textToSpeech("Lỗi lưu dữ liệu sever, Vui lòng liên hệ Admin", 1.2)
+                        textToSpeech("Lỗi lưu dữ liệu sever", 1.2)
                     else:
-                        textToSpeech(f"Xin chào {userAreCheckIn}", 1.2)
+                        textToSpeech(f"Xin chào {userAreCheckIn}", 1.2, personName)
                 else:
-                    textToSpeech("Rờ ép ID chưa được đăng ký", 1.2)
+                    textToSpeech("Rờ ép ID chưa được đăng ký", 1.2, rfidNotRegistered)
                 inputRFID = ""
                 seeRFID = True
             if k == key.BACKSPACE:
                 inputRFID = inputRFID[:-1]
-
-def drawFaceCoordinate(frame, detection):
-    x, y, w, h = detection
-    cv2.putText(frame, f'Authentication', (x, y - 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
-    return x, y, w, h
 
 def checkTime(savedTime, second = 0.3):
     return round(((datetime.now() - savedTime).total_seconds()), 2) >= second
@@ -250,68 +321,70 @@ def isInsideRectangle(smallX, smallY, smallW, smallH, largeX, largeY, largeW, la
     return False
 
 def detectionAndTracking(frame):
-
     rgbFrame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = faceDetection.process(rgbFrame)
     data = {}
+    isFace = True
     if results.detections:
         arrFaceTracking = []
         arrNotFaceTracking = []
+        smallFace = True
         for detection in results.detections:
             bboxC = detection.location_data.relative_bounding_box
-            ih, iw, _ = frame.shape
+            ih, iw = frame.shape[:2]
             x, y, w, h = int(bboxC.xmin * iw), int(bboxC.ymin * ih), int(bboxC.width * iw), int(bboxC.height * ih)
+                # cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+            if frame[y:y+h, x:x+w].shape[1] >= 65:
+                smallFace = False
+                scaleW = int(w * 1.75)
+                scaleH = int(h * 1.75)
+                scaleX = int(x - (scaleW - w) / 2)
+                scaleY = int(y - (scaleH - h) / 2)
+                if not trackers:
+                    trackers[1] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH))
+                    arrFaceTracking.append(1)
+                else:
+                    for key, (bbox1, bbox2) in list(trackers.items()):
+                        scaleX2, scaleY2, scaleW2, scaleH2 = bbox2
+                        inside = isInsideRectangle(x, y, w, h, scaleX2, scaleY2, scaleW2, scaleH2)
+                        if inside:
+                            trackers[key] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH))
+                            arrFaceTracking.append(key)
+                            break
+                        else:
+                            arrNotFaceTracking.append(key)
+                            newKey = key + 1
+                            if newKey not in trackers and newKey > max(trackers.keys()):
+                                trackers[newKey] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH))
+                                arrFaceTracking.append(newKey)
 
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
-
-            newW = int(w * 1.75)
-            newH = int(h * 1.75)
-            newX = int(x - (newW - w) / 2)
-            newY = int(y - (newH - h) / 2)
-
-            if not trackers:
-                trackers[1] = (newX, newY, newW, newH)
-            else:
-                for key, (bbox) in list(trackers.items()):
-                    largeX, largeY, largeW, largeH = bbox
-                    inside = isInsideRectangle(x, y, w, h, largeX, largeY, largeW, largeH)
-
-                    if inside: 
-                        trackers[key] = (newX, newY, newW, newH)
-                        arrFaceTracking.append(key)
-                        break
-                    else:
-                        arrNotFaceTracking.append(key)
-                        newKey = key + 1
-                        if newKey not in trackers and newKey > max(trackers.keys()):
-                            trackers[newKey] = (newX, newY, newW, newH)
-                            arrFaceTracking.append(newKey)
-
-            cv2.rectangle(frame, (newX, newY), (newX + newW, newY + newH), (0, 255, 0), 2)
-
-        arrFaceTracking = set(arrFaceTracking)
-        arrNotFaceTracking = set(arrNotFaceTracking)
-        
-
-        if len(arrNotFaceTracking):
-            for num in arrNotFaceTracking:
-                if num not in arrFaceTracking:
-                    del trackers[num]
-        elif len(arrFaceTracking):
-            for num in list(trackers.keys()):
-                if num not in arrFaceTracking:
-                    del trackers[num]
+                # cv2.rectangle(frame, (scaleX, scaleY), (scaleX + scaleW, scaleY + scaleH), (0, 255, 0), 2)
+        if smallFace:
+            textToSpeech("Khuôn mặt bị nhỏ, mời tiến tới.", 1.2, faceTooSmall)
         else:
-            print(f"No faces found in the frame!")
+            arrFaceTracking = set(arrFaceTracking)
+            arrNotFaceTracking = set(arrNotFaceTracking)
+            
+            if len(arrNotFaceTracking):
+                for num in arrNotFaceTracking:
+                    if num not in arrFaceTracking:
+                        del trackers[num]
 
-        for key, (bbox) in list(trackers.items()):
-            x, y, w, h = bbox    
+            elif len(arrFaceTracking):
+                for num in list(trackers.keys()):
+                    if num not in arrFaceTracking:
+                        del trackers[num]
+            else:
+                isFace = False
 
-            new_w = int(w * 0.7)
-            new_h = int(h * 0.7)
-            new_x = int(x + (w - new_w) / 2)
-            new_y = int(y + (h - new_h) / 2)
-            data[key] = (new_x, new_y, new_w, new_h)
+            if isFace:
+                for key, (bbox1, _) in list(trackers.items()):
+                    x, y, w, h = bbox1    
+                    scaleW = int(w * 1.2)
+                    scaleH = int(h * 1.2)
+                    scaleX = int(x + (w - scaleW) / 2)
+                    scaleY = int(y + (h - scaleH) / 2)
+                    data[key] = (scaleX, scaleY, scaleW, scaleH)
 
     return data
 
@@ -320,6 +393,73 @@ def genUniqueId(length=20):
     unique_id = ''.join(random.choices(characters, k=length))
     return unique_id
 
+def checkBlurry(image, threshold=100):
+    if image is not None and image.size > 0:
+        grayImage = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        laplacian = cv2.Laplacian(grayImage, cv2.CV_64F)
+        variance = laplacian.var()
+        if variance < threshold:
+            return True
+    return False
+
+def compareAkaze(image1, image2):
+    if image1 is not None and image2 is not None and image1.size > 0 and image2.size > 0:
+        hFace1, wFace1 = image1.shape[:2]
+        hFace2, wFace2 = image2.shape[:2]
+        if hFace1 < 65 or wFace1 < 65 or hFace2 < 65 or wFace2 < 65:
+            textToSpeech("Khuôn mặt bị nhỏ, mời tiến tới.", 1.2, faceTooSmall)
+            return 0
+        else:
+            img1 = cv2.cvtColor(image1, cv2.COLOR_BGR2GRAY)
+            img2 = cv2.cvtColor(image2, cv2.COLOR_BGR2GRAY)
+
+            akaze = cv2.AKAZE_create()
+
+            _, des1 = akaze.detectAndCompute(img1, None)
+            _, des2 = akaze.detectAndCompute(img2, None)
+
+            if des1 is None or des2 is None:
+                return 0
+
+            if des1.dtype != des2.dtype:
+                des2 = des2.astype(des1.dtype)
+
+            if des1.shape[1] != des2.shape[1]:
+                raise ValueError("Descriptors have different number of columns!")
+
+            bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+
+            matches = bf.match(des1, des2)
+            matches = sorted(matches, key=lambda x: x.distance)
+
+            totalMatches = len(matches)
+            if totalMatches == 0:
+                return 0
+
+            goodMatches = sum([1 for match in matches if match.distance < 50])
+            similarityPercentage = round(goodMatches / totalMatches, 2)
+            return 1 if similarityPercentage > 0.6 else 2
+    else:
+        return 0
+
+def corruptImageDetected(image):
+    
+    grayImg = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    grayFloat = np.float32(grayImg)
+    f = np.fft.fft2(grayFloat)
+    fshift = np.fft.fftshift(f)
+
+    magnitudeSpectrum = np.log(np.abs(fshift) + 1)
+
+    lowFrequencyEnergy = np.sum(magnitudeSpectrum[:10, :10])
+    highFrequencyEnergy = np.sum(magnitudeSpectrum[10:, 10:])
+
+    if lowFrequencyEnergy > highFrequencyEnergy:
+        return True
+    else:
+        return False
+
 def videoCapture():
     global checkTimeRecognition, trackingIdAssign, imageHash, setTrackerName, trackers, prev_frame_time, new_frame_time
 
@@ -327,15 +467,17 @@ def videoCapture():
     video = "output_video.avi"
     video2 = "output_video2.avi"
     video3 = "6863054282731021257.mp4"
-    cap = cv2.VideoCapture(video3)
+    cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     cap.set(cv2.CAP_PROP_FPS, 60)
     fps = cap.get(cv2.CAP_PROP_FPS)
+    sleepTimer = datetime.now()
+    windowFrame = False
     second = 0
     countSecond = 0
     if not cap.isOpened():
-        textToSpeech("Không thể mở máy ảnh")
+        textToSpeech("Không thể mở máy ảnh", cameraOpenError)
         exit()
 
     while True:
@@ -344,12 +486,12 @@ def videoCapture():
             break
 
         originalFrame = frame.copy()
-        # cv2.polylines(frame, [points], isClosed=True, color=(0, 255, 0), thickness=2)
 
         detections = detectionAndTracking(frame)
-        arrDetection = {}
-
+        arrDetection = {} 
         if len(detections):
+
+            sleepTimer = datetime.now() + timedelta(seconds=10)
             for key, (bbox) in list(detections.items()):
 
                 trackerId = key
@@ -359,12 +501,12 @@ def videoCapture():
                 h = y + h
 
                 topPoint = int((x + w) / 2)
-                # cv2.circle(frame, (topPoint, h), 3, color.Red, -1)
                 checkPointLine = cv2.pointPolygonTest(points, (topPoint, h), False)
                 checkPointLine = 1
                 if checkPointLine > 0:
                     arrDetection[trackerId] = bbox
-            if len(arrDetection) and checkTime(checkTimeRecognition, 0.2):
+
+            if len(arrDetection):
                 arrTrackerId = sorted(arrDetection.keys()) if arrDetection is not None else []
                 if trackingIdAssign is None:
                     trackingIdAssign = min(arrTrackerId, default=None)
@@ -373,9 +515,11 @@ def videoCapture():
                     trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
 
                 if trackingIdAssign not in setTrackerName:
-                    setTrackerName[trackingIdAssign] = {"name": "Unknown", "employeeCode": None, "Unknown": 0, "Known": 0, "authenticate": "", "timekeeping": False, "timeChecked": 0, "timer": datetime.now(), "time": datetime.now()}
+                    setTrackerName[trackingIdAssign] = {"name": "Unknown", "employeeCode": None, "Unknown": 0, "Known": 0, "timekeeping": False, "numCheck": 0, "blur": 0}
                 
-                if setTrackerName[trackingIdAssign]["timeChecked"] >= 0.5:
+                if setTrackerName[trackingIdAssign]["numCheck"] >= 5:
+                    if setTrackerName[trackingIdAssign]["blur"] >= 5:
+                        imageHash = None
                     if setTrackerName[trackingIdAssign]["timekeeping"]:
                         trackingIdAssign = findNextLarger(arrTrackerId, trackingIdAssign)
                     else:
@@ -384,7 +528,7 @@ def videoCapture():
                             if percentage <= 25:
                                 setTrackerName[trackingIdAssign]["timekeeping"] = True
                                 x, y, w, h = arrDetection[trackingIdAssign]
-                                updateInfo({setTrackerName[trackingIdAssign]['employeeCode']: originalFrame[y:y+h, x:x+w]})
+                                updateInfo(setTrackerName[trackingIdAssign]['employeeCode'], originalFrame[y:y+h, x:x+w])
                                 trackingIdAssign = findNextLarger(arrTrackerId, trackingIdAssign)
                             else:
                                 trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
@@ -393,36 +537,42 @@ def videoCapture():
                 else:
                     isOther = False
                     x, y, w, h = arrDetection[trackingIdAssign]
-                    dataHash = getImageHash(originalFrame[y:y+h, x:x+w])
-                    if imageHash is None:
-                        imageHash = dataHash
-                        isOther = True
-                    else:
-                        if imageHash != dataHash:
-                            imageHash = dataHash
-                            isOther = True
-                        elif setTrackerName[trackingIdAssign]["name"] != "Unknown":
-                            setTrackerName[trackingIdAssign]["Known"] = setTrackerName[trackingIdAssign]["Known"] + 1
+                    croppedFace = originalFrame[y:y+h, x:x+w]
+                    if croppedFace is not None and croppedFace.size > 0:
+                        resizeFace = cv2.resize(croppedFace, (croppedFace.shape[1], croppedFace.shape[0]), interpolation=cv2.INTER_LANCZOS4)
+
+                        isBlurry = checkBlurry(resizeFace, 150)
+                        corruptImage = corruptImageDetected(resizeFace)
+
+                        if isBlurry or corruptImage:
+                            textToSpeech("Ảnh bị mờ", 1.2, imageUnclear)
                         else:
-                            setTrackerName[trackingIdAssign]["Unknown"] = setTrackerName[trackingIdAssign]["Unknown"] + 1
+                            isCompare = compareAkaze(imageHash, resizeFace)
+                            if imageHash is None:
+                                imageHash = resizeFace
+                                isOther = True
+                            else:
+                                if isCompare == 2:
+                                    imageHash = resizeFace
+                                    isOther = True
+                                elif isCompare == 1 or isCompare == 0:
+                                    if setTrackerName[trackingIdAssign]["name"] != "Unknown":
+                                        setTrackerName[trackingIdAssign]["Known"] = setTrackerName[trackingIdAssign]["Known"] + 1
+                                    else:
+                                        setTrackerName[trackingIdAssign]["Unknown"] = setTrackerName[trackingIdAssign]["Unknown"] + 1
+                                        setTrackerName[trackingIdAssign]["blur"] += 1
+
                     if isOther:
-                        getNameFace(originalFrame[y:y+h, x:x+w], trackingIdAssign)
-                    setTrackerName[trackingIdAssign]["timeChecked"] += 0.2
+                        getNameFace(resizeFace, trackingIdAssign)
+                    setTrackerName[trackingIdAssign]["numCheck"] += 1
 
                 checkTimeRecognition = datetime.now()
             for key, (bbox) in list(detections.items()):
                 x, y, w, h = bbox
-                trackerName = "Unknown"
-                isPass = False
                 if key in setTrackerName:
-                    isPass = setTrackerName[key]["timekeeping"]
-                    if isPass:
-                        trackerName = "Successful"
-                    else:
-                        trackerName = setTrackerName[key]["name"]
-                        
-                cv2.putText(frame, f'# {key} {trackerName}', (x, int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.65, (0, 255, 0), 2)
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                    if setTrackerName[key]["timekeeping"]:
+                        cv2.putText(frame, f'Success', (x, int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.8, color.Green, 2)
+                cv2.rectangle(frame, (x, y), (x + w, y + h), color.Green, 2)
         else:
             trackers = {}
             setTrackerName = {}
@@ -436,23 +586,29 @@ def videoCapture():
             countSecond = 1
         else:
             countSecond+=1
-        text = f'FPS: {fps} trackingId: {trackingIdAssign}'
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        scale, thickness = 0.8, 2
-        textColor, bgColor = color.White, (167, 80, 167)
 
-        (textWidth, textHeight), _ = cv2.getTextSize(text, font, scale, thickness)
+        text = f'FPS: {fps} - {trackingIdAssign}'
+
+        (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
         x, y = 30, 30
 
-        cv2.rectangle(frame, (x - 10, y - textHeight - 10), (x + textWidth + 10, y + 10), bgColor, -1)
-        cv2.putText(frame, text, (x, y), font, scale, textColor, thickness)
-        for name in [name for name in locals() if name not in ['self', 'request', 'response', 'app', '__name__']]:
-            if locals()[name] is not None:
-                memory_size = sys.getsizeof(locals()[name])
-                print(f"Variable '{name}' is using {memory_size} bytes of memory.")
-                # del locals()[name]
-        print("------------------------------------")
+        cv2.rectangle(frame, (x - 10, y - textHeight - 10), (x + textWidth + 10, y + 10), (167, 80, 167), -1)
+        cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color.White, 2)
+        if sleepTimer >= datetime.now():
+            if windowFrame == False:
+                windowFrame = True
+                # subprocess.run(["xset", "dpms", "force", "on"])
+            # cv2.namedWindow('ByteTrack')
+            # cv2.moveWindow('ByteTrack', 2700, 100)
+            # cv2.moveWindow('ByteTrack', 0, 0)
+            # cv2.imshow("ByteTrack", frame)
+        else:
+            if windowFrame:
+                windowFrame = False
+                # cv2.destroyAllWindows()
+                # subprocess.run(["xset", "dpms", "force", "off"])
         cv2.imshow("ByteTrack", frame)
+        
         if cv2.waitKey(10) & 0xFF == ord('q'):
             break
 
