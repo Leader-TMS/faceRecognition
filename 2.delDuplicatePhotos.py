@@ -24,13 +24,11 @@ def findDuplicateImagesInSubfolders(directory):
                     else:
                         images[fileHash] = filePath
     print(f'Total duplicates found: {len(duplicates)}')              
-    return duplicates
-
-directory = 'dataset'
-
-duplicates = findDuplicateImagesInSubfolders(directory)
-
-for duplicate in duplicates:
+    for duplicate in duplicates:
     # print(f"Removing duplicate image: {duplicate}")
-    os.remove(duplicate)
+        os.remove(duplicate)
+
+if __name__ == "__main__":
+    directory = 'dataset'
+    findDuplicateImagesInSubfolders(directory)
 
