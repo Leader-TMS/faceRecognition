@@ -171,7 +171,7 @@ def waitFullName():
     if stopThread:
         stopThread = False
     while not stopThread:
-        if checkTime(resetCallTTS, 1):
+        if checkTime(resetCallTTS, 0.5):
             if len(objCheckName):
                 listName = checkFormatTXT(objCheckName)
                 if listName !=  '':
@@ -185,7 +185,7 @@ def waitFullName():
 
 def updateInfo(employeeCode, image):
     global resetCallTTS, stopThread
-    fullName = getEmployeesByCode(employeeCode)["full_name"]
+    fullName = getEmployeesByCode(employeeCode)["short_name"]
     if  fullName:
         if employeeCode not in objCheckName:
             stopThread = True
@@ -242,7 +242,7 @@ def faceAuthentication(frame):
                         employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
                         employeeCode = getEmployeesByCode(employeeCode)
                         if employeeCode:
-                            label = employeeCode['full_name']
+                            label = employeeCode['short_name']
                             employeeCode = employeeCode['employee_code']
                     else:
                         saveFaceDirection(frame, "evidences/invalid")
@@ -277,7 +277,7 @@ def scanRFID():
             if k == key.ENTER:
                 employee = getEmployeesByRFID(inputRFID)
                 if employee:
-                    userAreCheckIn = employee['full_name']
+                    userAreCheckIn = employee['short_name']
                     employeeCode = employee['employee_code']
                     saveData = saveAttendance("rfid", employeeCode, genUniqueId())
                     if saveData == False:
@@ -459,9 +459,26 @@ def corruptImageDetected(image):
         return True
     else:
         return False
+    
+def textToSpeechSleep(text, speed=1.0):
+    tts = gTTS(text=text, lang='vi', slow=False)
+    fp =io.BytesIO()
+    tts.write_to_fp(fp)
+    fp.seek(0)
+    
+    audio = AudioSegment.from_mp3(fp)
+
+    if speed != 1.0:
+        audio = audio.speedup(playback_speed=speed)
+    play(audio)
+
+    del fp
+    del audio
+    del tts
+    videoCapture()
 
 def videoCapture():
-    global checkTimeRecognition, trackingIdAssign, imageHash, setTrackerName, trackers, prev_frame_time, new_frame_time
+    global checkTimeRecognition, trackingIdAssign, imageHash, setTrackerName, trackers
 
     rtsp = f"rtsp://{user}:{password}@{ip}:{port}/cam/realmonitor?channel=1&subtype=0"
     video = "output_video.avi"
@@ -473,157 +490,157 @@ def videoCapture():
     cap.set(cv2.CAP_PROP_FPS, 60)
     fps = cap.get(cv2.CAP_PROP_FPS)
     sleepTimer = datetime.now()
-    windowFrame = False
     second = 0
     countSecond = 0
     if not cap.isOpened():
-        textToSpeech("Không thể mở máy ảnh", cameraOpenError)
-        exit()
-
+        cap.release()
+        cv2.destroyAllWindows()
+        textToSpeechSleep("Không tìm thấy máy ảnh, Vui lòng kiểm tra lại", 1.2)
+    
     while True:
         ret, frame = cap.read()
         if not ret:
+            cap.release()
+            cv2.destroyAllWindows()
+            textToSpeechSleep("Máy ảnh bị mất tín hiệu, Bắt đầu khởi động lại phần mềm", 1.2)
             break
+        else:
+            originalFrame = frame.copy()
 
-        originalFrame = frame.copy()
+            detections = detectionAndTracking(frame)
+            arrDetection = {} 
+            if len(detections):
 
-        detections = detectionAndTracking(frame)
-        arrDetection = {} 
-        if len(detections):
+                sleepTimer = datetime.now() + timedelta(minutes=1)
+                for key, (bbox) in list(detections.items()):
 
-            sleepTimer = datetime.now() + timedelta(seconds=10)
-            for key, (bbox) in list(detections.items()):
+                    trackerId = key
+                    x, y, w, h = bbox
 
-                trackerId = key
-                x, y, w, h = bbox
+                    w = x + w
+                    h = y + h
 
-                w = x + w
-                h = y + h
+                    topPoint = int((x + w) / 2)
+                    checkPointLine = cv2.pointPolygonTest(points, (topPoint, h), False)
+                    checkPointLine = 1
+                    if checkPointLine > 0:
+                        arrDetection[trackerId] = bbox
 
-                topPoint = int((x + w) / 2)
-                checkPointLine = cv2.pointPolygonTest(points, (topPoint, h), False)
-                checkPointLine = 1
-                if checkPointLine > 0:
-                    arrDetection[trackerId] = bbox
+                if len(arrDetection):
+                    arrTrackerId = sorted(arrDetection.keys()) if arrDetection is not None else []
+                    if trackingIdAssign is None:
+                        trackingIdAssign = min(arrTrackerId, default=None)
+                        
+                    if trackingIdAssign not in arrTrackerId:
+                        trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
 
-            if len(arrDetection):
-                arrTrackerId = sorted(arrDetection.keys()) if arrDetection is not None else []
-                if trackingIdAssign is None:
-                    trackingIdAssign = min(arrTrackerId, default=None)
+                    if trackingIdAssign not in setTrackerName:
+                        setTrackerName[trackingIdAssign] = {"name": "Unknown", "employeeCode": None, "Unknown": 0, "Known": 0, "timekeeping": False, "numCheck": 0, "blur": 0}
                     
-                if trackingIdAssign not in arrTrackerId:
-                    trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
-
-                if trackingIdAssign not in setTrackerName:
-                    setTrackerName[trackingIdAssign] = {"name": "Unknown", "employeeCode": None, "Unknown": 0, "Known": 0, "timekeeping": False, "numCheck": 0, "blur": 0}
-                
-                if setTrackerName[trackingIdAssign]["numCheck"] >= 5:
-                    if setTrackerName[trackingIdAssign]["blur"] >= 5:
-                        imageHash = None
-                    if setTrackerName[trackingIdAssign]["timekeeping"]:
-                        trackingIdAssign = findNextLarger(arrTrackerId, trackingIdAssign)
-                    else:
-                        if setTrackerName[trackingIdAssign]["name"] != "Unknown":
-                            percentage = round((setTrackerName[trackingIdAssign]['Unknown'] / setTrackerName[trackingIdAssign]['Known']) * 100, 2)
-                            if percentage <= 25:
-                                setTrackerName[trackingIdAssign]["timekeeping"] = True
-                                x, y, w, h = arrDetection[trackingIdAssign]
-                                updateInfo(setTrackerName[trackingIdAssign]['employeeCode'], originalFrame[y:y+h, x:x+w])
-                                trackingIdAssign = findNextLarger(arrTrackerId, trackingIdAssign)
+                    if setTrackerName[trackingIdAssign]["numCheck"] >= 5:
+                        if setTrackerName[trackingIdAssign]["blur"] >= 5:
+                            imageHash = None
+                        if setTrackerName[trackingIdAssign]["timekeeping"]:
+                            trackingIdAssign = findNextLarger(arrTrackerId, trackingIdAssign)
+                        else:
+                            if setTrackerName[trackingIdAssign]["name"] != "Unknown":
+                                percentage = round((setTrackerName[trackingIdAssign]['Unknown'] / setTrackerName[trackingIdAssign]['Known']) * 100, 2)
+                                if percentage <= 25:
+                                    setTrackerName[trackingIdAssign]["timekeeping"] = True
+                                    x, y, w, h = arrDetection[trackingIdAssign]
+                                    updateInfo(setTrackerName[trackingIdAssign]['employeeCode'], originalFrame[y:y+h, x:x+w])
+                                    trackingIdAssign = findNextLarger(arrTrackerId, trackingIdAssign)
+                                else:
+                                    trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
                             else:
                                 trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
-                        else:
-                            trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
-                else:
-                    isOther = False
-                    x, y, w, h = arrDetection[trackingIdAssign]
-                    croppedFace = originalFrame[y:y+h, x:x+w]
-                    if croppedFace is not None and croppedFace.size > 0:
-                        resizeFace = cv2.resize(croppedFace, (croppedFace.shape[1], croppedFace.shape[0]), interpolation=cv2.INTER_LANCZOS4)
+                    else:
+                        isOther = False
+                        x, y, w, h = arrDetection[trackingIdAssign]
+                        croppedFace = originalFrame[y:y+h, x:x+w]
+                        if croppedFace is not None and croppedFace.size > 0:
+                            resizeFace = cv2.resize(croppedFace, (croppedFace.shape[1], croppedFace.shape[0]), interpolation=cv2.INTER_LANCZOS4)
 
-                        isBlurry = checkBlurry(resizeFace, 150)
-                        corruptImage = corruptImageDetected(resizeFace)
+                            isBlurry = checkBlurry(resizeFace, 150)
+                            corruptImage = corruptImageDetected(resizeFace)
 
-                        if isBlurry or corruptImage:
-                            textToSpeech("Ảnh bị mờ", 1.2, imageUnclear)
-                        else:
-                            isCompare = compareAkaze(imageHash, resizeFace)
-                            if imageHash is None:
-                                imageHash = resizeFace
-                                isOther = True
+                            if isBlurry or corruptImage:
+                                # textToSpeech("Ảnh bị mờ", 1.2, imageUnclear)
+                                print("Ảnh bị mờ")
                             else:
-                                if isCompare == 2:
+                                isCompare = compareAkaze(imageHash, resizeFace)
+                                if imageHash is None:
                                     imageHash = resizeFace
                                     isOther = True
-                                elif isCompare == 1 or isCompare == 0:
-                                    if setTrackerName[trackingIdAssign]["name"] != "Unknown":
-                                        setTrackerName[trackingIdAssign]["Known"] = setTrackerName[trackingIdAssign]["Known"] + 1
-                                    else:
-                                        setTrackerName[trackingIdAssign]["Unknown"] = setTrackerName[trackingIdAssign]["Unknown"] + 1
-                                        setTrackerName[trackingIdAssign]["blur"] += 1
+                                else:
+                                    if isCompare == 2:
+                                        imageHash = resizeFace
+                                        isOther = True
+                                    elif isCompare == 1 or isCompare == 0:
+                                        if setTrackerName[trackingIdAssign]["name"] != "Unknown":
+                                            setTrackerName[trackingIdAssign]["Known"] = setTrackerName[trackingIdAssign]["Known"] + 1
+                                        else:
+                                            setTrackerName[trackingIdAssign]["Unknown"] = setTrackerName[trackingIdAssign]["Unknown"] + 1
+                                            setTrackerName[trackingIdAssign]["blur"] += 1
 
-                    if isOther:
-                        getNameFace(resizeFace, trackingIdAssign)
-                    setTrackerName[trackingIdAssign]["numCheck"] += 1
+                        if isOther:
+                            getNameFace(resizeFace, trackingIdAssign)
+                        setTrackerName[trackingIdAssign]["numCheck"] += 1
 
-                checkTimeRecognition = datetime.now()
-            for key, (bbox) in list(detections.items()):
-                x, y, w, h = bbox
-                if key in setTrackerName:
-                    if setTrackerName[key]["timekeeping"]:
-                        cv2.putText(frame, f'Success', (x, int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.8, color.Green, 2)
-                cv2.rectangle(frame, (x, y), (x + w, y + h), color.Green, 2)
-        else:
-            trackers = {}
-            setTrackerName = {}
-            trackingIdAssign = None
-            imageHash = None
+                    checkTimeRecognition = datetime.now()
+                for key, (bbox) in list(detections.items()):
+                    x, y, w, h = bbox
+                    if key in setTrackerName:
+                        if setTrackerName[key]["timekeeping"]:
+                            cv2.putText(frame, f'Success', (x, int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.8, color.Green, 2)
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), color.Green, 2)
+            else:
+                trackers = {}
+                setTrackerName = {}
+                trackingIdAssign = None
+                imageHash = None
 
-        if second != datetime.now().second:
-            second = datetime.now().second
-            if countSecond != 0:
-                fps = countSecond
-            countSecond = 1
-        else:
-            countSecond+=1
+            if second != datetime.now().second:
+                second = datetime.now().second
+                if countSecond != 0:
+                    fps = countSecond
+                countSecond = 1
+            else:
+                countSecond+=1
 
-        text = f'FPS: {fps} - {trackingIdAssign}'
+            text = f'FPS: {fps} - {trackingIdAssign}'
 
-        (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
-        x, y = 30, 30
+            (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+            x, y = 30, 30
 
-        cv2.rectangle(frame, (x - 10, y - textHeight - 10), (x + textWidth + 10, y + 10), (167, 80, 167), -1)
-        cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color.White, 2)
-        if sleepTimer >= datetime.now():
-            if windowFrame == False:
-                windowFrame = True
+            cv2.rectangle(frame, (x - 10, y - textHeight - 10), (x + textWidth + 10, y + 10), (167, 80, 167), -1)
+            cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color.White, 2)
+            # if sleepTimer >= datetime.now():
                 # subprocess.run(["xset", "dpms", "force", "on"])
-            # cv2.namedWindow('ByteTrack')
-            # cv2.moveWindow('ByteTrack', 2700, 100)
-            # cv2.moveWindow('ByteTrack', 0, 0)
-            # cv2.imshow("ByteTrack", frame)
-        else:
-            if windowFrame:
-                windowFrame = False
+                # cv2.namedWindow("ByteTrack", cv2.WINDOW_NORMAL)
+                # cv2.setWindowProperty("ByteTrack", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+                # cv2.imshow("ByteTrack", frame)
+            # else:
                 # cv2.destroyAllWindows()
                 # subprocess.run(["xset", "dpms", "force", "off"])
-        cv2.imshow("ByteTrack", frame)
-        
+            cv2.imshow("ByteTrack", frame)
         if cv2.waitKey(10) & 0xFF == ord('q'):
-            break
-
+            cap.release()
+            cv2.destroyAllWindows()
+            exit()
+            
     cap.release()
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    scanRFIDThread = threading.Thread(target=scanRFID)
-    scanRFIDThread.daemon = True
-    scanRFIDThread.start()
+    # scanRFIDThread = threading.Thread(target=scanRFID)
+    # scanRFIDThread.daemon = True
+    # scanRFIDThread.start()
 
-    videoCaptureThread = threading.Thread(target=videoCapture)
-    videoCaptureThread.start()
-    videoCaptureThread.join()
-
+    # videoCaptureThread = threading.Thread(target=videoCapture)
+    # videoCaptureThread.start()
+    # videoCaptureThread.join()
+    videoCapture()
     print("All processes finished.")
 
 # try:
