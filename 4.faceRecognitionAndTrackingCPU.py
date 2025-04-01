@@ -26,9 +26,13 @@ from tempfile import NamedTemporaryFile
 import subprocess
 import signal
 import time
-import queue
 mtcnn = MTCNN(margin=40, select_largest=False, selection_method='probability', keep_all=True, min_face_size=40, thresholds=[0.7, 0.8, 0.8])
-inceptionModel = InceptionResnetV1(pretrained='vggface2').eval()
+# inceptionModel = InceptionResnetV1(pretrained='vggface2').eval()
+# tracedModel = torch.jit.trace(inceptionModel, torch.randn(1, 3, 112, 112))
+# torch.set_grad_enabled(False)
+# tracedModel.save('inception_resnet_v1_traced.pt')
+
+tracedModel = torch.jit.load('tracedModel/inceptionResnetV1Traced.pt')
 svmModel = joblib.load('svmModel.pkl')
 labelEncoder = joblib.load('labelEncoder.pkl')
 
@@ -39,7 +43,10 @@ devVideo = sorted(devVideo)[::2]
 
 #Setup mediapipe
 mpFaceDetection = mp.solutions.face_detection
+mpFaceMesh = mp.solutions.face_mesh
+
 faceDetection = mpFaceDetection.FaceDetection(min_detection_confidence=0.8, model_selection=1)
+faceMesh = mpFaceMesh.FaceMesh()
 mpDrawing = mp.solutions.drawing_utils
 
 class Color:
@@ -89,6 +96,7 @@ rfidNotRegistered = config['settingTypeText']["RFID_NOT_REGISTERED"]
 faceTooSmall = config['settingTypeText']["FACE_TOO_SMALL"]
 cameraOpenError = config['settingTypeText']["CAMERA_OPEN_ERROR"]
 imageUnclear = config['settingTypeText']["IMAGE_UNCLEAR"]
+badAngle = config['settingTypeText']["BAD_ANGLE"]
 
 reading= False
 roi_x1, roi_y1, roi_x2, roi_y2 = 250, 250, 600, 350
@@ -113,11 +121,12 @@ def checkKillProcess():
                 if pid != maxPid:
                     try:
                         os.kill(pid, signal.SIGKILL)
-                        if key in objTypeText:
-                            del objTypeText[key]
                     except ProcessLookupError:
                         print("Process kill failed")
                         pass
+                    finally:
+                        if key in objTypeText:
+                            del objTypeText[key]
 
 def generateAndPlayAudio(text, speed, typeId):
     global reading, objTypeText
@@ -217,25 +226,26 @@ def faceAuthentication(frame):
         employeeCode = None
         hFace, wFace = frame.shape[:2]
         if frame is not None and frame.size > 0:
-            if wFace >= 120 and wFace <= 180:
-                wFace = int(wFace * 0.5)
-                hFace = int(hFace * 0.5)
-            elif wFace > 180:
-                wFace = int(wFace * 0.4)
-                hFace = int(hFace * 0.4)
+            wFace = max(int(wFace * 0.4), 45)
+            hFace = max(int(hFace * 0.4), 45)
 
             frame = cv2.resize(frame, (wFace, hFace), interpolation=cv2.INTER_LANCZOS4)
 
             faceRgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
             faceMtcnn = mtcnn(faceRgb)
 
             if faceMtcnn is not None and len(faceMtcnn) > 0:
-                for i, face in enumerate(faceMtcnn):
-                    embedding = inceptionModel(face.unsqueeze(0)).detach().numpy().flatten()
+                for _, face in enumerate(faceMtcnn):
+                    with torch.no_grad():
+                        # embedding = inceptionModel(face.unsqueeze(0)).detach().cpu().numpy().flatten()
+                        embedding = tracedModel(face.unsqueeze(0)).detach().cpu().numpy().flatten()
+
                     embedding = normalize([embedding])
+
                     labelIndex = svmModel.predict(embedding)[0]
+
                     prob = svmModel.predict_proba(embedding)[0]
+
                     probPercent = round(prob[labelIndex], 2)
 
                     if probPercent >= 0.75:
@@ -320,6 +330,42 @@ def isInsideRectangle(smallX, smallY, smallW, smallH, largeX, largeY, largeW, la
             return True
     return False
 
+def faceAngle(nose, leftEye, rightEye, fWidth, fHeight):
+
+    noseX, noseY = int(nose.x * fWidth), int(nose.y * fHeight)
+    leftEyeX, leftEyeY = int(leftEye.x * fWidth), int(leftEye.y * fHeight)
+    rightEyeX, rightEyeY = int(rightEye.x * fWidth), int(rightEye.y * fHeight)
+    
+    vector1 = np.array([leftEyeX - noseX, leftEyeY - noseY])
+
+    vector2 = np.array([rightEyeX - noseX, rightEyeY - noseY])
+
+    dotProduct = np.dot(vector1, vector2)
+    magnitude1 = np.linalg.norm(vector1)
+    magnitude2 = np.linalg.norm(vector2)
+
+    cosAngle = round(dotProduct / (magnitude1 * magnitude2), 2)
+    return cosAngle <= 0.7
+
+def goodFaceAngle(image, width, height):
+    goodAngle = False
+    if image is not None and image.size > 0:
+        results = faceMesh.process(image)
+        if results.multi_face_landmarks:
+            for landmarks in results.multi_face_landmarks:
+                leftEye = landmarks.landmark[173]
+                rightEye = landmarks.landmark[398]
+                nose = landmarks.landmark[4]
+                goodAngle = faceAngle(nose, leftEye, rightEye, width, height)
+    return goodAngle
+
+def checkLight(image, threshold = 90):
+    avgBrightness = 0
+    if image is not None and image.size > 0:
+        grayImage = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        avgBrightness = np.mean(grayImage)
+    return avgBrightness >= threshold
+
 def detectionAndTracking(frame):
     rgbFrame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = faceDetection.process(rgbFrame)
@@ -328,63 +374,79 @@ def detectionAndTracking(frame):
     if results.detections:
         arrFaceTracking = []
         arrNotFaceTracking = []
-        smallFace = True
+        smallFace = []
+
         for detection in results.detections:
             bboxC = detection.location_data.relative_bounding_box
-            ih, iw = frame.shape[:2]
+            ih, iw = rgbFrame.shape[:2]
             x, y, w, h = int(bboxC.xmin * iw), int(bboxC.ymin * ih), int(bboxC.width * iw), int(bboxC.height * ih)
-                # cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
-            if frame[y:y+h, x:x+w].shape[1] >= 65:
-                smallFace = False
-                scaleW = int(w * 1.75)
-                scaleH = int(h * 1.75)
-                scaleX = int(x - (scaleW - w) / 2)
-                scaleY = int(y - (scaleH - h) / 2)
-                if not trackers:
-                    trackers[1] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH))
-                    arrFaceTracking.append(1)
+            # cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+            faceDetected = rgbFrame[y:y+h, x:x+w]
+        
+            if faceDetected is not None and faceDetected.size > 0 and checkLight(faceDetected):
+
+                hframe, wframe = faceDetected.shape[:2]
+
+                goodAngle = goodFaceAngle(faceDetected, wframe, hframe)
+                if  wframe >= 55 and wframe < 65:
+                    smallFace.append(0)
+                elif wframe >= 65:
+                    smallFace.append(1)
+                    scaleW = int(w * 1.55)
+                    scaleH = int(h * 1.55)
+                    scaleX = int(x - (scaleW - w) / 2)
+                    scaleY = int(y - (scaleH - h) / 2)
+
+                    if not trackers:
+                        trackers[1] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH), goodAngle, False)
+                        arrFaceTracking.append(1)
+                    else:
+                        for key, (bbox1, bbox2, _, _) in list(trackers.items()):
+                            print(f'speed: {abs(x - bbox1[0]) / 1}')
+                            lowSpeed = abs(x - bbox1[0]) / 1 <= 5
+                            scaleX2, scaleY2, scaleW2, scaleH2 = bbox2
+                            inside = isInsideRectangle(x, y, w, h, scaleX2, scaleY2, scaleW2, scaleH2)
+                            if inside:
+                                if key in setTrackerName and setTrackerName[key]['timekeeping']:
+                                    goodAngle = True
+                                trackers[key] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH), goodAngle, lowSpeed)
+                                arrFaceTracking.append(key)
+                                break
+                            else:
+                                arrNotFaceTracking.append(key)
+                                newKey = key + 1
+                                if newKey not in trackers and newKey > max(trackers.keys()):
+                                    trackers[newKey] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH), goodAngle, lowSpeed)
+                                    arrFaceTracking.append(newKey)
+                    # cv2.rectangle(frame, (scaleX, scaleY), (scaleX + scaleW, scaleY + scaleH), (0, 255, 0), 2)
+        
+        if len(smallFace):
+            if 1 in smallFace:
+                arrFaceTracking = set(arrFaceTracking)
+                arrNotFaceTracking = set(arrNotFaceTracking)
+                
+                if len(arrNotFaceTracking):
+                    for num in arrNotFaceTracking:
+                        if num not in arrFaceTracking:
+                            del trackers[num]
+
+                elif len(arrFaceTracking):
+                    for num in list(trackers.keys()):
+                        if num not in arrFaceTracking:
+                            del trackers[num]
                 else:
-                    for key, (bbox1, bbox2) in list(trackers.items()):
-                        scaleX2, scaleY2, scaleW2, scaleH2 = bbox2
-                        inside = isInsideRectangle(x, y, w, h, scaleX2, scaleY2, scaleW2, scaleH2)
-                        if inside:
-                            trackers[key] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH))
-                            arrFaceTracking.append(key)
-                            break
-                        else:
-                            arrNotFaceTracking.append(key)
-                            newKey = key + 1
-                            if newKey not in trackers and newKey > max(trackers.keys()):
-                                trackers[newKey] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH))
-                                arrFaceTracking.append(newKey)
+                    isFace = False
 
-                # cv2.rectangle(frame, (scaleX, scaleY), (scaleX + scaleW, scaleY + scaleH), (0, 255, 0), 2)
-        if smallFace:
-            textToSpeech("Khuôn mặt bị nhỏ, mời tiến tới.", 1.2, faceTooSmall)
-        else:
-            arrFaceTracking = set(arrFaceTracking)
-            arrNotFaceTracking = set(arrNotFaceTracking)
-            
-            if len(arrNotFaceTracking):
-                for num in arrNotFaceTracking:
-                    if num not in arrFaceTracking:
-                        del trackers[num]
-
-            elif len(arrFaceTracking):
-                for num in list(trackers.keys()):
-                    if num not in arrFaceTracking:
-                        del trackers[num]
+                if isFace:
+                    for key, (bbox1, _, checkAngle, lowSpeed) in list(trackers.items()):
+                        x, y, w, h = bbox1    
+                        scaleW = int(w * 1.2)
+                        scaleH = int(h * 1.2)
+                        scaleX = int(x + (w - scaleW) / 2)
+                        scaleY = int(y + (h - scaleH) / 2)
+                        data[key] = ((scaleX, scaleY, scaleW, scaleH), checkAngle, lowSpeed)
             else:
-                isFace = False
-
-            if isFace:
-                for key, (bbox1, _) in list(trackers.items()):
-                    x, y, w, h = bbox1    
-                    scaleW = int(w * 1.2)
-                    scaleH = int(h * 1.2)
-                    scaleX = int(x + (w - scaleW) / 2)
-                    scaleY = int(y + (h - scaleH) / 2)
-                    data[key] = (scaleX, scaleY, scaleW, scaleH)
+                textToSpeech("Vui lòng, tiến tới.", 1.2, faceTooSmall)
 
     return data
 
@@ -404,41 +466,40 @@ def checkBlurry(image, threshold=100):
 
 def compareAkaze(image1, image2):
     if image1 is not None and image2 is not None and image1.size > 0 and image2.size > 0:
-        hFace1, wFace1 = image1.shape[:2]
-        hFace2, wFace2 = image2.shape[:2]
-        if hFace1 < 65 or wFace1 < 65 or hFace2 < 65 or wFace2 < 65:
-            textToSpeech("Khuôn mặt bị nhỏ, mời tiến tới.", 1.2, faceTooSmall)
+        # hFace1, wFace1 = image1.shape[:2]
+        # hFace2, wFace2 = image2.shape[:2]
+        # if hFace1 < 65 or wFace1 < 65 or hFace2 < 65 or wFace2 < 65:
+        #     return 0
+        # else:
+        img1 = cv2.cvtColor(image1, cv2.COLOR_BGR2GRAY)
+        img2 = cv2.cvtColor(image2, cv2.COLOR_BGR2GRAY)
+
+        akaze = cv2.AKAZE_create()
+
+        _, des1 = akaze.detectAndCompute(img1, None)
+        _, des2 = akaze.detectAndCompute(img2, None)
+
+        if des1 is None or des2 is None:
             return 0
-        else:
-            img1 = cv2.cvtColor(image1, cv2.COLOR_BGR2GRAY)
-            img2 = cv2.cvtColor(image2, cv2.COLOR_BGR2GRAY)
 
-            akaze = cv2.AKAZE_create()
+        if des1.dtype != des2.dtype:
+            des2 = des2.astype(des1.dtype)
 
-            _, des1 = akaze.detectAndCompute(img1, None)
-            _, des2 = akaze.detectAndCompute(img2, None)
+        if des1.shape[1] != des2.shape[1]:
+            raise ValueError("Descriptors have different number of columns!")
 
-            if des1 is None or des2 is None:
-                return 0
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
 
-            if des1.dtype != des2.dtype:
-                des2 = des2.astype(des1.dtype)
+        matches = bf.match(des1, des2)
+        matches = sorted(matches, key=lambda x: x.distance)
 
-            if des1.shape[1] != des2.shape[1]:
-                raise ValueError("Descriptors have different number of columns!")
+        totalMatches = len(matches)
+        if totalMatches == 0:
+            return 0
 
-            bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-
-            matches = bf.match(des1, des2)
-            matches = sorted(matches, key=lambda x: x.distance)
-
-            totalMatches = len(matches)
-            if totalMatches == 0:
-                return 0
-
-            goodMatches = sum([1 for match in matches if match.distance < 50])
-            similarityPercentage = round(goodMatches / totalMatches, 2)
-            return 1 if similarityPercentage > 0.6 else 2
+        goodMatches = sum([1 for match in matches if match.distance < 50])
+        similarityPercentage = round(goodMatches / totalMatches, 2)
+        return 1 if similarityPercentage > 0.6 else 2
     else:
         return 0
 
@@ -477,6 +538,12 @@ def textToSpeechSleep(text, speed=1.0):
     del tts
     videoCapture()
 
+def motionBlurCompensation(image):
+    blurred = cv2.GaussianBlur(image, (21, 21), 0)
+    sharpened = cv2.addWeighted(image, 1.5, blurred, -0.5, 0)
+    
+    return sharpened
+
 def videoCapture():
     global checkTimeRecognition, trackingIdAssign, imageHash, setTrackerName, trackers
 
@@ -505,15 +572,16 @@ def videoCapture():
             textToSpeechSleep("Máy ảnh bị mất tín hiệu, Bắt đầu khởi động lại phần mềm", 1.2)
             break
         else:
+            # frame = motionBlurCompensation(frame)
             originalFrame = frame.copy()
-
-            detections = detectionAndTracking(frame)
-            arrDetection = {} 
+            detections = {}
+            arrDetection = {}
+            if checkLight(frame):
+                detections = detectionAndTracking(frame)
             if len(detections):
 
                 sleepTimer = datetime.now() + timedelta(minutes=1)
-                for key, (bbox) in list(detections.items()):
-
+                for key, (bbox, angle, lowSpeed) in list(detections.items()):
                     trackerId = key
                     x, y, w, h = bbox
 
@@ -524,7 +592,7 @@ def videoCapture():
                     checkPointLine = cv2.pointPolygonTest(points, (topPoint, h), False)
                     checkPointLine = 1
                     if checkPointLine > 0:
-                        arrDetection[trackerId] = bbox
+                        arrDetection[trackerId] = (bbox, angle, lowSpeed)
 
                 if len(arrDetection):
                     arrTrackerId = sorted(arrDetection.keys()) if arrDetection is not None else []
@@ -535,65 +603,71 @@ def videoCapture():
                         trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
 
                     if trackingIdAssign not in setTrackerName:
-                        setTrackerName[trackingIdAssign] = {"name": "Unknown", "employeeCode": None, "Unknown": 0, "Known": 0, "timekeeping": False, "numCheck": 0, "blur": 0}
+                        setTrackerName[trackingIdAssign] = {"name": "Unknown", "employeeCode": None, "Unknown": 0, "Known": 0, "timekeeping": False, "numCheck": 0}
                     
-                    if setTrackerName[trackingIdAssign]["numCheck"] >= 5:
-                        if setTrackerName[trackingIdAssign]["blur"] >= 5:
-                            imageHash = None
+                    if setTrackerName[trackingIdAssign]["numCheck"] >= 4:
                         if setTrackerName[trackingIdAssign]["timekeeping"]:
                             trackingIdAssign = findNextLarger(arrTrackerId, trackingIdAssign)
                         else:
                             if setTrackerName[trackingIdAssign]["name"] != "Unknown":
                                 percentage = round((setTrackerName[trackingIdAssign]['Unknown'] / setTrackerName[trackingIdAssign]['Known']) * 100, 2)
-                                if percentage <= 25:
+                                if percentage <= 33.3:
                                     setTrackerName[trackingIdAssign]["timekeeping"] = True
-                                    x, y, w, h = arrDetection[trackingIdAssign]
+                                    (x, y, w, h), _, _ = arrDetection[trackingIdAssign]
                                     updateInfo(setTrackerName[trackingIdAssign]['employeeCode'], originalFrame[y:y+h, x:x+w])
                                     trackingIdAssign = findNextLarger(arrTrackerId, trackingIdAssign)
                                 else:
+                                    imageHash = None
                                     trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
                             else:
+                                imageHash = None
                                 trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
                     else:
                         isOther = False
-                        x, y, w, h = arrDetection[trackingIdAssign]
-                        croppedFace = originalFrame[y:y+h, x:x+w]
-                        if croppedFace is not None and croppedFace.size > 0:
-                            resizeFace = cv2.resize(croppedFace, (croppedFace.shape[1], croppedFace.shape[0]), interpolation=cv2.INTER_LANCZOS4)
+                        (x, y, w, h), angle, lowSpeed = arrDetection[trackingIdAssign]
+                        if angle and lowSpeed:
+                            croppedFace = originalFrame[y:y+h, x:x+w]
+                            if croppedFace is not None and croppedFace.size > 0:
+                                resizeFace = cv2.resize(croppedFace, (croppedFace.shape[1], croppedFace.shape[0]), interpolation=cv2.INTER_LANCZOS4)
+                                corruptImage = corruptImageDetected(resizeFace)
 
-                            isBlurry = checkBlurry(resizeFace, 150)
-                            corruptImage = corruptImageDetected(resizeFace)
-
-                            if isBlurry or corruptImage:
-                                # textToSpeech("Ảnh bị mờ", 1.2, imageUnclear)
-                                print("Ảnh bị mờ")
-                            else:
-                                isCompare = compareAkaze(imageHash, resizeFace)
-                                if imageHash is None:
-                                    imageHash = resizeFace
-                                    isOther = True
+                                if corruptImage:
+                                    # textToSpeech("Ảnh bị mờ", 1.2, imageUnclear)
+                                    print("Ảnh bị mờ")
                                 else:
-                                    if isCompare == 2:
+                                    isCompare = compareAkaze(imageHash, resizeFace)
+                                    if imageHash is None:
                                         imageHash = resizeFace
                                         isOther = True
-                                    elif isCompare == 1 or isCompare == 0:
-                                        if setTrackerName[trackingIdAssign]["name"] != "Unknown":
-                                            setTrackerName[trackingIdAssign]["Known"] = setTrackerName[trackingIdAssign]["Known"] + 1
-                                        else:
-                                            setTrackerName[trackingIdAssign]["Unknown"] = setTrackerName[trackingIdAssign]["Unknown"] + 1
-                                            setTrackerName[trackingIdAssign]["blur"] += 1
+                                    else:
+                                        if isCompare == 2:
+                                            imageHash = resizeFace
+                                            isOther = True
+                                        elif isCompare == 1 or isCompare == 0:
+                                            if setTrackerName[trackingIdAssign]["name"] != "Unknown":
+                                                setTrackerName[trackingIdAssign]["Known"] = setTrackerName[trackingIdAssign]["Known"] + 1
+                                            else:
+                                                setTrackerName[trackingIdAssign]["Unknown"] = setTrackerName[trackingIdAssign]["Unknown"] + 1
 
-                        if isOther:
-                            getNameFace(resizeFace, trackingIdAssign)
+                            if isOther:
+                                getNameFace(resizeFace, trackingIdAssign)
                         setTrackerName[trackingIdAssign]["numCheck"] += 1
 
                     checkTimeRecognition = datetime.now()
-                for key, (bbox) in list(detections.items()):
+                for key, (bbox, angle, lowSpeed) in list(detections.items()):
                     x, y, w, h = bbox
                     if key in setTrackerName:
                         if setTrackerName[key]["timekeeping"]:
-                            cv2.putText(frame, f'Success', (x, int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.8, color.Green, 2)
-                    cv2.rectangle(frame, (x, y), (x + w, y + h), color.Green, 2)
+                            text = 'Success'
+                            (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+                            cv2.rectangle(frame, (x - 15, y - textHeight -15), (x + textWidth + 15, y), (66, 171, 85), -1)
+                            cv2.putText(frame, text, (x, int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.8, color.White, 2)
+                        elif not lowSpeed:
+                            text = "Please slow down"
+                            (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+                            cv2.rectangle(frame, (x - 10, y - textHeight - 15), (x + textWidth + 10, y), color.Red, -1)
+                            cv2.putText(frame, text, (x, int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.8, color.White, 2)
+                    # cv2.rectangle(frame, (x, y), (x + w, y + h), color.Green, 2)
             else:
                 trackers = {}
                 setTrackerName = {}
@@ -623,6 +697,7 @@ def videoCapture():
             # else:
                 # cv2.destroyAllWindows()
                 # subprocess.run(["xset", "dpms", "force", "off"])
+            # frame = cv2.resize(frame, (480, 360), interpolation=cv2.INTER_LANCZOS4)
             cv2.imshow("ByteTrack", frame)
         if cv2.waitKey(10) & 0xFF == ord('q'):
             cap.release()

@@ -15,3 +15,4 @@
 /svmModel.pkl
 /labelEncoder.pkl
 /config.ini
+/tracedModel
