@@ -72,3 +72,39 @@ for row in cursor.fetchall():
 # Đóng kết nối
 cursor.close()
 conn.close()
+
+# EXPORT PROD
+# import mysql.connector
+# import csv
+
+# conn = mysql.connector.connect(
+#     host="103.92.30.66",
+#     user="ttd",
+#     port=33064,
+#     password="M8C,[KZok9]4",
+#     database="ttd_data"
+# )
+# cursor = conn.cursor()
+
+# query = """
+# SELECT name, hat_model, color, logo, quantity, po, started_at, completion_date 
+# FROM customer_orders 
+# WHERE status LIKE 'approval' 
+# AND date_approval >= '2024-12-01' 
+# AND deleted_at IS NULL;
+# """
+# cursor.execute(query)
+
+# columns = [desc[0] for desc in cursor.description]
+
+# with open('customer_orders_data.csv', 'w', newline='', encoding='utf-8') as file:
+#     writer = csv.writer(file)
+#     writer.writerow(columns)
+#     for row in cursor:
+#         print(f'row: {row}')
+#         writer.writerow(row)
+
+# cursor.close()
+# conn.close()
+
+# print("Dữ liệu đã được xuất ra file customer_orders_data.csv")
