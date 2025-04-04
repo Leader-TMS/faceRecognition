@@ -97,6 +97,7 @@ faceTooSmall = config['settingTypeText']["FACE_TOO_SMALL"]
 cameraOpenError = config['settingTypeText']["CAMERA_OPEN_ERROR"]
 imageUnclear = config['settingTypeText']["IMAGE_UNCLEAR"]
 badAngle = config['settingTypeText']["BAD_ANGLE"]
+auth = config['settingTypeText']["AUTHENTICATION"]
 
 reading= False
 roi_x1, roi_y1, roi_x2, roi_y2 = 250, 250, 600, 350
@@ -387,7 +388,9 @@ def detectionAndTracking(frame):
 
                 hframe, wframe = faceDetected.shape[:2]
 
-                goodAngle = goodFaceAngle(faceDetected, wframe, hframe)
+                goodAngle = goodFaceAngle(frame[y:y+h, x:x+w], wframe, hframe)
+                blur = checkBlurry(frame[y:y+h, x:x+w])
+                
                 if  wframe >= 55 and wframe < 65:
                     smallFace.append(0)
                 elif wframe >= 65:
@@ -398,10 +401,10 @@ def detectionAndTracking(frame):
                     scaleY = int(y - (scaleH - h) / 2)
 
                     if not trackers:
-                        trackers[1] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH), goodAngle, False)
+                        trackers[1] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH), goodAngle, False, blur)
                         arrFaceTracking.append(1)
                     else:
-                        for key, (bbox1, bbox2, _, _) in list(trackers.items()):
+                        for key, (bbox1, bbox2, _, _, _) in list(trackers.items()):
                             print(f'speed: {abs(x - bbox1[0]) / 1}')
                             lowSpeed = abs(x - bbox1[0]) / 1 <= 5
                             scaleX2, scaleY2, scaleW2, scaleH2 = bbox2
@@ -409,14 +412,14 @@ def detectionAndTracking(frame):
                             if inside:
                                 if key in setTrackerName and setTrackerName[key]['timekeeping']:
                                     goodAngle = True
-                                trackers[key] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH), goodAngle, lowSpeed)
+                                trackers[key] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH), goodAngle, lowSpeed, blur)
                                 arrFaceTracking.append(key)
                                 break
                             else:
                                 arrNotFaceTracking.append(key)
                                 newKey = key + 1
                                 if newKey not in trackers and newKey > max(trackers.keys()):
-                                    trackers[newKey] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH), goodAngle, lowSpeed)
+                                    trackers[newKey] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH), goodAngle, lowSpeed, blur)
                                     arrFaceTracking.append(newKey)
                     # cv2.rectangle(frame, (scaleX, scaleY), (scaleX + scaleW, scaleY + scaleH), (0, 255, 0), 2)
         
@@ -438,13 +441,13 @@ def detectionAndTracking(frame):
                     isFace = False
 
                 if isFace:
-                    for key, (bbox1, _, checkAngle, lowSpeed) in list(trackers.items()):
+                    for key, (bbox1, _, checkAngle, lowSpeed, blur) in list(trackers.items()):
                         x, y, w, h = bbox1    
                         scaleW = int(w * 1.2)
                         scaleH = int(h * 1.2)
                         scaleX = int(x + (w - scaleW) / 2)
                         scaleY = int(y + (h - scaleH) / 2)
-                        data[key] = ((scaleX, scaleY, scaleW, scaleH), checkAngle, lowSpeed)
+                        data[key] = ((scaleX, scaleY, scaleW, scaleH), checkAngle, lowSpeed, blur)
             else:
                 textToSpeech("Vui lòng, tiến tới.", 1.2, faceTooSmall)
 
@@ -552,8 +555,14 @@ def videoCapture():
     video2 = "output_video2.avi"
     video3 = "6863054282731021257.mp4"
     cap = cv2.VideoCapture(0)
+
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+    # 0.75 ON
+    # 0.25 OFF
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+    cap.set(cv2.CAP_PROP_EXPOSURE , -4)
     cap.set(cv2.CAP_PROP_FPS, 60)
     fps = cap.get(cv2.CAP_PROP_FPS)
     sleepTimer = datetime.now()
@@ -581,7 +590,7 @@ def videoCapture():
             if len(detections):
 
                 sleepTimer = datetime.now() + timedelta(minutes=1)
-                for key, (bbox, angle, lowSpeed) in list(detections.items()):
+                for key, (bbox, angle, lowSpeed, blur) in list(detections.items()):
                     trackerId = key
                     x, y, w, h = bbox
 
@@ -592,7 +601,7 @@ def videoCapture():
                     checkPointLine = cv2.pointPolygonTest(points, (topPoint, h), False)
                     checkPointLine = 1
                     if checkPointLine > 0:
-                        arrDetection[trackerId] = (bbox, angle, lowSpeed)
+                        arrDetection[trackerId] = (bbox, angle, lowSpeed, blur)
 
                 if len(arrDetection):
                     arrTrackerId = sorted(arrDetection.keys()) if arrDetection is not None else []
@@ -613,57 +622,68 @@ def videoCapture():
                                 percentage = round((setTrackerName[trackingIdAssign]['Unknown'] / setTrackerName[trackingIdAssign]['Known']) * 100, 2)
                                 if percentage <= 33.3:
                                     setTrackerName[trackingIdAssign]["timekeeping"] = True
-                                    (x, y, w, h), _, _ = arrDetection[trackingIdAssign]
+                                    (x, y, w, h), _, _, _= arrDetection[trackingIdAssign]
                                     updateInfo(setTrackerName[trackingIdAssign]['employeeCode'], originalFrame[y:y+h, x:x+w])
                                     trackingIdAssign = findNextLarger(arrTrackerId, trackingIdAssign)
                                 else:
                                     imageHash = None
                                     trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
+                                    # textToSpeech('Chưa nhận diện được', 1.2, auth)
                             else:
                                 imageHash = None
                                 trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
+                                # textToSpeech('Chưa nhận diện được', 1.2, auth)
                     else:
                         isOther = False
-                        (x, y, w, h), angle, lowSpeed = arrDetection[trackingIdAssign]
+                        (x, y, w, h), angle, lowSpeed, blur = arrDetection[trackingIdAssign]
                         if angle and lowSpeed:
-                            croppedFace = originalFrame[y:y+h, x:x+w]
-                            if croppedFace is not None and croppedFace.size > 0:
-                                resizeFace = cv2.resize(croppedFace, (croppedFace.shape[1], croppedFace.shape[0]), interpolation=cv2.INTER_LANCZOS4)
-                                corruptImage = corruptImageDetected(resizeFace)
+                            if blur:
+                                imgOpt = motionBlurCompensation(originalFrame[y:y+h, x:x+w])
+                                blur = checkBlurry(imgOpt)
+                                croppedFace = imgOpt
+                                arrDetection[trackingIdAssign] = ((x, y, w, h), angle, lowSpeed, blur)
+                                detections[trackingIdAssign] = ((x, y, w, h), angle, lowSpeed, blur)
+                            else:
+                                croppedFace = originalFrame[y:y+h, x:x+w]
 
-                                if corruptImage:
-                                    # textToSpeech("Ảnh bị mờ", 1.2, imageUnclear)
-                                    print("Ảnh bị mờ")
-                                else:
-                                    isCompare = compareAkaze(imageHash, resizeFace)
-                                    if imageHash is None:
-                                        imageHash = resizeFace
-                                        isOther = True
+                            if not blur:
+                                if croppedFace is not None and croppedFace.size > 0:
+                                    resizeFace = cv2.resize(croppedFace, (croppedFace.shape[1], croppedFace.shape[0]), interpolation=cv2.INTER_LANCZOS4)
+                                    corruptImage = corruptImageDetected(resizeFace)
+
+                                    if corruptImage:
+                                        # textToSpeech("Ảnh bị mờ", 1.2, imageUnclear)
+                                        print("Ảnh bị mờ")
                                     else:
-                                        if isCompare == 2:
+                                        isCompare = compareAkaze(imageHash, resizeFace)
+                                        if imageHash is None:
                                             imageHash = resizeFace
                                             isOther = True
-                                        elif isCompare == 1 or isCompare == 0:
-                                            if setTrackerName[trackingIdAssign]["name"] != "Unknown":
-                                                setTrackerName[trackingIdAssign]["Known"] = setTrackerName[trackingIdAssign]["Known"] + 1
-                                            else:
-                                                setTrackerName[trackingIdAssign]["Unknown"] = setTrackerName[trackingIdAssign]["Unknown"] + 1
-
-                            if isOther:
-                                getNameFace(resizeFace, trackingIdAssign)
+                                        else:
+                                            if isCompare == 2:
+                                                imageHash = resizeFace
+                                                isOther = True
+                                            elif isCompare == 1 or isCompare == 0:
+                                                if setTrackerName[trackingIdAssign]["name"] != "Unknown":
+                                                    setTrackerName[trackingIdAssign]["Known"] = setTrackerName[trackingIdAssign]["Known"] + 1
+                                                else:
+                                                    setTrackerName[trackingIdAssign]["Unknown"] = setTrackerName[trackingIdAssign]["Unknown"] + 1
+                                if isOther:
+                                    # textToSpeech('Bắt đầu nhận diện', 1.2, auth)
+                                    getNameFace(resizeFace, trackingIdAssign)
                         setTrackerName[trackingIdAssign]["numCheck"] += 1
 
                     checkTimeRecognition = datetime.now()
-                for key, (bbox, angle, lowSpeed) in list(detections.items()):
+                for key, (bbox, angle, lowSpeed, blur) in list(detections.items()):
                     x, y, w, h = bbox
                     if key in setTrackerName:
                         if setTrackerName[key]["timekeeping"]:
                             text = 'Success'
                             (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
-                            cv2.rectangle(frame, (x - 15, y - textHeight -15), (x + textWidth + 15, y), (66, 171, 85), -1)
+                            cv2.rectangle(frame, (x - 15, y - textHeight -15), (x + textWidth + 15, y), (65, 169, 35), -1)
                             cv2.putText(frame, text, (x, int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.8, color.White, 2)
-                        elif not lowSpeed:
-                            text = "Please slow down"
+                        elif not angle or not lowSpeed or blur:
+                            text = f"{'look straight' if not angle else ''} {'slow down' if not lowSpeed else ''} {'blur' if blur else ''}"
                             (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
                             cv2.rectangle(frame, (x - 10, y - textHeight - 15), (x + textWidth + 10, y), color.Red, -1)
                             cv2.putText(frame, text, (x, int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.8, color.White, 2)
