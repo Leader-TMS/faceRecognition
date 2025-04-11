@@ -346,7 +346,7 @@ def faceAngle(nose, leftEye, rightEye, fWidth, fHeight):
     magnitude2 = np.linalg.norm(vector2)
 
     cosAngle = round(dotProduct / (magnitude1 * magnitude2), 2)
-    return cosAngle <= 0.7
+    return cosAngle <= 0.6
 
 def goodFaceAngle(image, width, height):
     goodAngle = False
@@ -384,10 +384,10 @@ def detectionAndTracking(frame):
             # cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
             faceDetected = rgbFrame[y:y+h, x:x+w]
         
-            if faceDetected is not None and faceDetected.size > 0 and checkLight(faceDetected):
+            if faceDetected is not None and faceDetected.size > 0:
 
                 hframe, wframe = faceDetected.shape[:2]
-
+                light = checkLight(frame[y:y+h, x:x+w])
                 goodAngle = goodFaceAngle(frame[y:y+h, x:x+w], wframe, hframe)
                 blur = checkBlurry(frame[y:y+h, x:x+w])
                 
@@ -401,10 +401,10 @@ def detectionAndTracking(frame):
                     scaleY = int(y - (scaleH - h) / 2)
 
                     if not trackers:
-                        trackers[1] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH), goodAngle, False, blur)
+                        trackers[1] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH), light, goodAngle, False, blur)
                         arrFaceTracking.append(1)
                     else:
-                        for key, (bbox1, bbox2, _, _, _) in list(trackers.items()):
+                        for key, (bbox1, bbox2, _, _, _, _) in list(trackers.items()):
                             print(f'speed: {abs(x - bbox1[0]) / 1}')
                             lowSpeed = abs(x - bbox1[0]) / 1 <= 5
                             scaleX2, scaleY2, scaleW2, scaleH2 = bbox2
@@ -412,14 +412,14 @@ def detectionAndTracking(frame):
                             if inside:
                                 if key in setTrackerName and setTrackerName[key]['timekeeping']:
                                     goodAngle = True
-                                trackers[key] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH), goodAngle, lowSpeed, blur)
+                                trackers[key] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH), light, goodAngle, lowSpeed, blur)
                                 arrFaceTracking.append(key)
                                 break
                             else:
                                 arrNotFaceTracking.append(key)
                                 newKey = key + 1
                                 if newKey not in trackers and newKey > max(trackers.keys()):
-                                    trackers[newKey] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH), goodAngle, lowSpeed, blur)
+                                    trackers[newKey] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH), light, goodAngle, lowSpeed, blur)
                                     arrFaceTracking.append(newKey)
                     # cv2.rectangle(frame, (scaleX, scaleY), (scaleX + scaleW, scaleY + scaleH), (0, 255, 0), 2)
         
@@ -441,13 +441,13 @@ def detectionAndTracking(frame):
                     isFace = False
 
                 if isFace:
-                    for key, (bbox1, _, checkAngle, lowSpeed, blur) in list(trackers.items()):
+                    for key, (bbox1, _, light, checkAngle, lowSpeed, blur) in list(trackers.items()):
                         x, y, w, h = bbox1    
                         scaleW = int(w * 1.2)
                         scaleH = int(h * 1.2)
                         scaleX = int(x + (w - scaleW) / 2)
                         scaleY = int(y + (h - scaleH) / 2)
-                        data[key] = ((scaleX, scaleY, scaleW, scaleH), checkAngle, lowSpeed, blur)
+                        data[key] = ((scaleX, scaleY, scaleW, scaleH), light, checkAngle, lowSpeed, blur)
             else:
                 textToSpeech("Vui lòng, tiến tới.", 1.2, faceTooSmall)
 
@@ -547,6 +547,27 @@ def motionBlurCompensation(image):
     
     return sharpened
 
+def displayText(frame, x, y, w, light, angle, lowSpeed, blur, color):
+    x = x + w
+    conditions = [
+        (not light, "no light", color.Black),
+        (not angle, "look straight", color.Blue),
+        (not lowSpeed, "slow down", color.Red),
+        (blur, "blur", (167, 80, 167))
+    ]
+    
+    textY = y - 10
+    
+    for condition, text, rectColor in conditions:
+        if condition:
+            (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+            
+            cv2.rectangle(frame, (x, textY - textHeight - 12), (x + textWidth + 10, textY + 5), rectColor, -1)
+            
+            cv2.putText(frame, text, (x + 4, int(textY - 5)), cv2.FONT_HERSHEY_DUPLEX, 0.8, color.White, 2)
+            
+            textY += textHeight + 18
+
 def videoCapture():
     global checkTimeRecognition, trackingIdAssign, imageHash, setTrackerName, trackers
 
@@ -590,7 +611,7 @@ def videoCapture():
             if len(detections):
 
                 sleepTimer = datetime.now() + timedelta(minutes=1)
-                for key, (bbox, angle, lowSpeed, blur) in list(detections.items()):
+                for key, (bbox, ligth, angle, lowSpeed, blur) in list(detections.items()):
                     trackerId = key
                     x, y, w, h = bbox
 
@@ -601,7 +622,7 @@ def videoCapture():
                     checkPointLine = cv2.pointPolygonTest(points, (topPoint, h), False)
                     checkPointLine = 1
                     if checkPointLine > 0:
-                        arrDetection[trackerId] = (bbox, angle, lowSpeed, blur)
+                        arrDetection[trackerId] = (bbox, ligth, angle, lowSpeed, blur)
 
                 if len(arrDetection):
                     arrTrackerId = sorted(arrDetection.keys()) if arrDetection is not None else []
@@ -622,7 +643,7 @@ def videoCapture():
                                 percentage = round((setTrackerName[trackingIdAssign]['Unknown'] / setTrackerName[trackingIdAssign]['Known']) * 100, 2)
                                 if percentage <= 33.3:
                                     setTrackerName[trackingIdAssign]["timekeeping"] = True
-                                    (x, y, w, h), _, _, _= arrDetection[trackingIdAssign]
+                                    (x, y, w, h), _, _, _, _= arrDetection[trackingIdAssign]
                                     updateInfo(setTrackerName[trackingIdAssign]['employeeCode'], originalFrame[y:y+h, x:x+w])
                                     trackingIdAssign = findNextLarger(arrTrackerId, trackingIdAssign)
                                 else:
@@ -635,14 +656,14 @@ def videoCapture():
                                 # textToSpeech('Chưa nhận diện được', 1.2, auth)
                     else:
                         isOther = False
-                        (x, y, w, h), angle, lowSpeed, blur = arrDetection[trackingIdAssign]
-                        if angle and lowSpeed:
+                        (x, y, w, h), ligth, angle, lowSpeed, blur = arrDetection[trackingIdAssign]
+                        if ligth and angle and lowSpeed:
                             if blur:
                                 imgOpt = motionBlurCompensation(originalFrame[y:y+h, x:x+w])
                                 blur = checkBlurry(imgOpt)
                                 croppedFace = imgOpt
-                                arrDetection[trackingIdAssign] = ((x, y, w, h), angle, lowSpeed, blur)
-                                detections[trackingIdAssign] = ((x, y, w, h), angle, lowSpeed, blur)
+                                arrDetection[trackingIdAssign] = ((x, y, w, h), ligth, angle, lowSpeed, blur)
+                                detections[trackingIdAssign] = ((x, y, w, h), ligth, angle, lowSpeed, blur)
                             else:
                                 croppedFace = originalFrame[y:y+h, x:x+w]
 
@@ -674,7 +695,7 @@ def videoCapture():
                         setTrackerName[trackingIdAssign]["numCheck"] += 1
 
                     checkTimeRecognition = datetime.now()
-                for key, (bbox, angle, lowSpeed, blur) in list(detections.items()):
+                for key, (bbox, ligth, angle, lowSpeed, blur) in list(detections.items()):
                     x, y, w, h = bbox
                     if key in setTrackerName:
                         if setTrackerName[key]["timekeeping"]:
@@ -682,11 +703,16 @@ def videoCapture():
                             (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
                             cv2.rectangle(frame, (x - 15, y - textHeight -15), (x + textWidth + 15, y), (65, 169, 35), -1)
                             cv2.putText(frame, text, (x, int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.8, color.White, 2)
-                        elif not angle or not lowSpeed or blur:
-                            text = f"{'look straight' if not angle else ''} {'slow down' if not lowSpeed else ''} {'blur' if blur else ''}"
-                            (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
-                            cv2.rectangle(frame, (x - 10, y - textHeight - 15), (x + textWidth + 10, y), color.Red, -1)
-                            cv2.putText(frame, text, (x, int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.8, color.White, 2)
+                        else:
+                            displayText(frame, x, y, w, ligth, angle, lowSpeed, blur, color)
+                            # if not ligth:
+                            # if not angle:
+                            # if not lowSpeed:
+                            # if blur:
+                            # text = f"{'look straight' if not angle else ''} {'slow down' if not lowSpeed else ''} {'blur' if blur else ''}"
+                            # (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+                            # cv2.rectangle(frame, (x - 10, y - textHeight - 15), (x + textWidth + 10, y), color.Red, -1)
+                            # cv2.putText(frame, text, (x, int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.8, color.White, 2)
                     # cv2.rectangle(frame, (x, y), (x + w, y + h), color.Green, 2)
             else:
                 trackers = {}
