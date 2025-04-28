@@ -108,6 +108,32 @@ objCheckName = {}
 resetCallTTS = datetime.now()
 stopThread = False
 
+def turnOn():
+    try:
+        subprocess.run(
+            ['sudo', 'python', 'turnOn.py'],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+    except subprocess.CalledProcessError as e:
+        print("Lỗi khi thực thi lệnh:", e)
+        print("stdout:", e.stdout.decode())
+        print("stderr:", e.stderr.decode())
+
+def turnOff():
+    try:
+        subprocess.run(
+            ['sudo', 'python', 'turnOff.py'],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+    except subprocess.CalledProcessError as e:
+        print("Lỗi khi thực thi lệnh:", e)
+        print("stdout:", e.stdout.decode())
+        print("stderr:", e.stderr.decode())
+
 def checkKillProcess():
     objData = list(objTypeText.items())
     if len(objData) >= 2:
@@ -142,7 +168,7 @@ def generateAndPlayAudio(text, speed, typeId):
 
     if speed != 1.0:
         audio = audio.speedup(playback_speed=speed)
-
+    audio = audio + 10
     f = NamedTemporaryFile("w+b", suffix=".wav", delete=False)
     audio.export(f.name, "wav")
     process = subprocess.Popen(["ffplay", "-nodisp", "-autoexit", "-hide_banner", "-loglevel", "quiet", f.name])
@@ -316,7 +342,6 @@ def delAndFindNextLarger(arrTrackerId, trackingIdAssign):
         del setTrackerName[trackingIdAssign]
     return findNextLarger(arrTrackerId, trackingIdAssign)
 
-
 def getImageHash(image):
     if image is not None and image.size > 0:
         pilImage = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
@@ -365,6 +390,11 @@ def checkLight(image, threshold = 90):
     if image is not None and image.size > 0:
         grayImage = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         avgBrightness = np.mean(grayImage)
+    if avgBrightness >= threshold:
+        turnOff()
+    else:
+        turnOn()
+
     return avgBrightness >= threshold
 
 def detectionAndTracking(frame):

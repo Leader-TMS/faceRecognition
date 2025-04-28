@@ -16,3 +16,5 @@
 /labelEncoder.pkl
 /config.ini
 /tracedModel
+/__pycache__
+./employee.db
