@@ -25,15 +25,14 @@ from gtts import gTTS
 from pydub import AudioSegment
 from pydub.playback import play, _play_with_ffplay
 import io
-from PIL import Image
-import imagehash
 import string
 from skimage.metrics import structural_similarity as ssim
 from tempfile import NamedTemporaryFile
 import subprocess
 import signal
-from multiprocessing import Value, Process, Manager, set_start_method, freeze_support
-# from faceRecognition import faceRecognition
+from multiprocessing import Process, Manager
+import socket
+
 tracedModel = torch.jit.load('tracedModel/inceptionResnetV1Traced.pt')
 torch.set_grad_enabled(False)
 svmModel = joblib.load('svmModel.pkl')
@@ -102,6 +101,10 @@ class CentroidTracker:
         self.nextObjectId = 0
         self.objects = OrderedDict()
         self.disappeared = OrderedDict()
+    def reset(self):
+        self.nextObjectId = 0
+        self.objects = OrderedDict()
+        self.disappeared = OrderedDict()
 
     def register(self, box):
         self.objects[self.nextObjectId] = box
@@ -110,10 +113,9 @@ class CentroidTracker:
     def deregister(self, objectId):
         log(f"[ID {objectId}] Đã biến mất khỏi Frame")
         killJob(objectId)
-        del faceJobStates[objectId]
         del self.objects[objectId]
 
-    def scaleBox(self, box, scale=1.55):
+    def scaleBox(self, box, scale=1.6):
         x, y, w, h = box
         newW = int(w * scale)
         newH = int(h * scale)
@@ -170,7 +172,17 @@ startThread.start()
 def killJob(objectId):
     print(f"Prepare to kill job object {objectId}...")
     try:
-        pid = faceJobStates[objectId]["pid"]
+        jobState = faceJobStates.get(objectId)
+        if jobState:
+            pid = jobState.get("pid")
+        else:
+            pid = None
+        if objectId in faceJobStates:
+            del faceJobStates[objectId]
+        if objectId in trackName: 
+            del trackName[objectId]
+        if objectId in faceSpeedTrackers: 
+            del faceSpeedTrackers[objectId]
         if pid is not None:
             os.kill(pid, signal.SIGKILL)
             print(f"Killed job {pid}")
@@ -327,7 +339,7 @@ def generateAndPlayAudio(text, speed, typeId):
 
     if speed != 1.0:
         audio = audio.speedup(playback_speed=speed)
-    audio = audio + 15
+    # audio = audio + 15
     f = NamedTemporaryFile("w+b", suffix=".wav", delete=False)
     audio.export(f.name, "wav")
     process = subprocess.Popen(["ffplay", "-nodisp", "-autoexit", "-hide_banner", "-loglevel", "quiet", f.name])
@@ -381,6 +393,8 @@ def runRecognitionJob(objectId, faceJobStates):
     except Exception as e:
         log(f"Error: {e}")
     finally:
+        if name is None:
+            killJob(objectId)
         faceJobStates[objectId]["result"].append(name)
         faceJobStates[objectId]["code"] = code
         faceJobStates[objectId]["step"] += 1
@@ -508,28 +522,40 @@ def checkFormatTXT(objCheckName):
 def checkTime(savedTime, second = 0.3):
     return round(((datetime.now() - savedTime).total_seconds()), 2) >= second
 
-def textToSpeechSleep(text, speed=1.0):
-    tts = gTTS(text=text, lang='vi', slow=False)
-    fp =io.BytesIO()
-    tts.write_to_fp(fp)
-    fp.seek(0)
-    
-    audio = AudioSegment.from_mp3(fp)
+def textToSpeechSleep(inputData, speed=1.0):
+    isFile = False
+    if os.path.isfile(inputData):
+        isFile = True
+        audio = AudioSegment.from_file(inputData)
+    else:
+        tts = gTTS(text=inputData, lang='vi', slow=False)
+        fp =io.BytesIO()
+        tts.write_to_fp(fp)
+        fp.seek(0)
+        
+        audio = AudioSegment.from_mp3(fp)
 
     if speed != 1.0:
         audio = audio.speedup(playback_speed=speed)
-    # play(audio)
-
-    del fp
-    del audio
-    del tts
+    play(audio)
+    if not isFile:
+        del fp
+        del audio
+        del tts
     videoCapture()
 
+def checkInternet(host="8.8.8.8", port=53, timeout=3):
+    try:
+        socket.setdefaulttimeout(timeout)
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
+        return True
+    except socket.error:
+        return False
 
 def videoCapture():
     global faceJobStates, trackName, faceSpeedTrackers, startThread
     mpFaceDetection = mp.solutions.face_detection
-    faceDetection = mpFaceDetection.FaceDetection(min_detection_confidence=0.8, model_selection=0)
+    faceDetection = mpFaceDetection.FaceDetection(min_detection_confidence=0.5, model_selection=1)
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
@@ -542,19 +568,25 @@ def videoCapture():
     fps = 0
     sleepTimer = datetime.now()
     minObjectId = None
+    worked = False
+    if not checkInternet():
+        cap.release()
+        cv2.destroyAllWindows()
+        textToSpeechSleep("./noInternet.wav", 1.2)
+
     if not cap.isOpened():
         cap.release()
         cv2.destroyAllWindows()
         textToSpeechSleep("Không tìm thấy máy ảnh, Vui lòng kiểm tra lại", 1.2)
     while True:
         ret, frame = cap.read()
-        originalImage = frame.copy()
         if not ret:
             cap.release()
             cv2.destroyAllWindows()
             textToSpeechSleep("Máy ảnh bị mất tín hiệu, Bắt đầu khởi động lại phần mềm", 1.2)
             break
         else:
+            originalImage = frame.copy()
             frameCount += 1
             currentTime = time.time()
             if currentTime - prevTime >= 1:
@@ -577,11 +609,12 @@ def videoCapture():
                         y = int(bboxC.ymin * h)
                         width = int(bboxC.width * w)
                         height = int(bboxC.height * h)
-                        cv2.rectangle(frame, (x, y), (x + width, y + height), Color.White, 2)
                         rects.append((x, y, width, height))
 
             objects = tracker.update(rects)
             if len(objects):
+                if not worked:
+                    worked = True
                 for objectId, (x, y, w, h) in objects.items():
                     if objectId not in faceJobStates:
                         faceJobStates[objectId] = manager.dict({
@@ -593,138 +626,154 @@ def videoCapture():
                             "list_face": manager.list(),
                             "pid": None
                         })
-                    state = faceJobStates[objectId]
-                    filteredIds = [objId for objId, data in faceJobStates.items() if data['success'] == False]
-                    minObjectId = min(filteredIds) if filteredIds else None
-                    cv2.putText(frame, f'objectId: {objectId}', (x - 50, int(y - 50)), cv2.FONT_HERSHEY_DUPLEX, 0.8, Color.Red, 2)
-                    
-                    if objectId == minObjectId:
-                        faceCrop = originalImage[y:y+h, x:x+w]
-                        _, faceWidth = faceCrop.shape[:2]
-                        light = checkLight(faceCrop)
-                        if light:
-                            if  faceWidth >= 55 and faceWidth < 65:
-                                displayText(frame, x, y, w, light, True, True, True, False, Color)
-                            elif faceWidth >= 65:
-                                frameHeight, frameWidth = frame.shape[:2]
-                                centerXPixel = x + w // 2
-                                centerYPixel = y + h // 2
-                                centerXNorm = centerXPixel / frameWidth
-                                centerYNorm = centerYPixel / frameHeight
+                    if objectId in faceJobStates:
+                        state = faceJobStates[objectId]
+                        filteredIds = [objId for objId, data in faceJobStates.items() if data['success'] == False]
+                        minObjectId = min(filteredIds) if filteredIds else None
+                        if objectId == minObjectId:
+                            faceCrop = originalImage[y:y+h, x:x+w]
+                            _, faceWidth = faceCrop.shape[:2]
+                            light = checkLight(faceCrop)
+                            if light:
+                                if  faceWidth >= 55 and faceWidth < 65:
+                                    displayText(frame, x, y, w, light, True, True, True, False, Color)
+                                elif faceWidth >= 65:
+                                    frameHeight, frameWidth = frame.shape[:2]
+                                    centerXPixel = x + w // 2
+                                    centerYPixel = y + h // 2
+                                    centerXNorm = centerXPixel / frameWidth
+                                    centerYNorm = centerYPixel / frameHeight
 
-                                currentSpeedTime = time.time()
-                                centerNorm = (centerXNorm, centerYNorm)
-                                centerPixel = (centerXPixel, centerYPixel)
+                                    currentSpeedTime = time.time()
+                                    centerNorm = (centerXNorm, centerYNorm)
+                                    centerPixel = (centerXPixel, centerYPixel)
 
-                                normSpeed = 0
-                                pixelSpeed = 0
+                                    normSpeed = 0
+                                    pixelSpeed = 0
 
-                                if objectId not in faceSpeedTrackers:
-                                    faceSpeedTrackers[objectId] = {
-                                        "prev_norm": centerNorm,
-                                        "prev_pixel": centerPixel,
-                                        "time": currentSpeedTime
-                                    }
-                                else:
-                                    prevData = faceSpeedTrackers[objectId]
-                                    deltaTime = currentSpeedTime - prevData["time"]
-
-                                    if deltaTime > 0:
-                                        normDist = math.hypot(centerNorm[0] - prevData["prev_norm"][0],
-                                                            centerNorm[1] - prevData["prev_norm"][1])
-                                        normSpeed = round(normDist / deltaTime, 2)
-
-                                        pixelDist = math.hypot(
-                                            centerPixel[0] - prevData["prev_pixel"][0],
-                                            centerPixel[1] - prevData["prev_pixel"][1]
-                                        )
-                                        pixelSpeed = round(pixelDist / deltaTime, 2)
-
-                                        text = f"N:{normSpeed}/s | P:{pixelSpeed}px/s"
-                                        cv2.putText(frame, text, (x, y + h + 20),
-                                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, Color.Orange, 2)
-
-                                    faceSpeedTrackers[objectId] = {
-                                        "prev_norm": centerNorm,
-                                        "prev_pixel": centerPixel,
-                                        "time": currentSpeedTime
-                                    }
-                                
-                                blur = checkBlurry(faceCrop)
-                                angle = goodFaceAngle(faceCrop)
-                                lowSpeed = normSpeed < 0.3
-                                if state["step"] < countThread and not startThread.is_alive():
-                                    if angle and lowSpeed:
-                                        if blur:
-                                            imgOpt = motionBlurCompensation(faceCrop)
-                                            blur = checkBlurry(imgOpt)
-                                            faceCrop = imgOpt
-                                        if not blur:
-                                            if len(state["list_face"]) < countThread:
-                                                faceJobStates[objectId]["list_face"].append(faceCrop.copy())
-                                            startThread = Process(target=runRecognitionJob, args=(objectId, faceJobStates,))
-                                            startThread.daemon = True
-                                            faceJobStates[objectId]["pid"] = startThread.pid
-                                            startThread.start()
-                                        else:
-                                            displayText(frame, x, y, w, light, False, angle, lowSpeed, blur, Color)
+                                    if objectId not in faceSpeedTrackers:
+                                        faceSpeedTrackers[objectId] = {
+                                            "prev_norm": centerNorm,
+                                            "prev_pixel": centerPixel,
+                                            "time": currentSpeedTime
+                                        }
                                     else:
-                                        displayText(frame, x, y, w, light, False, angle, lowSpeed, blur, Color)
+                                        prevData = faceSpeedTrackers[objectId]
+                                        deltaTime = currentSpeedTime - prevData["time"]
 
-                                elif state["step"] < countThread and startThread.is_alive():
-                                    if len(state["list_face"]) < countThread:
+                                        if deltaTime > 0:
+                                            normDist = math.hypot(centerNorm[0] - prevData["prev_norm"][0],
+                                                                centerNorm[1] - prevData["prev_norm"][1])
+                                            normSpeed = round(normDist / deltaTime, 2)
+
+                                            pixelDist = math.hypot(
+                                                centerPixel[0] - prevData["prev_pixel"][0],
+                                                centerPixel[1] - prevData["prev_pixel"][1]
+                                            )
+                                            pixelSpeed = round(pixelDist / deltaTime, 2)
+
+                                            text = f"N:{normSpeed}/s | P:{pixelSpeed}px/s"
+                                            cv2.putText(frame, text, (x, y + h + 20),
+                                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, Color.Orange, 2)
+
+                                        faceSpeedTrackers[objectId] = {
+                                            "prev_norm": centerNorm,
+                                            "prev_pixel": centerPixel,
+                                            "time": currentSpeedTime
+                                        }
+                                    
+                                    blur = checkBlurry(faceCrop)
+                                    angle = goodFaceAngle(faceCrop)
+                                    lowSpeed = normSpeed < 0.3
+
+                                    if state["step"] < countThread and not startThread.is_alive():
                                         if angle and lowSpeed:
                                             if blur:
                                                 imgOpt = motionBlurCompensation(faceCrop)
                                                 blur = checkBlurry(imgOpt)
                                                 faceCrop = imgOpt
                                             if not blur:
-                                                faceJobStates[objectId]["list_face"].append(faceCrop.copy())
+                                                if len(state["list_face"]) < countThread:
+                                                    if objectId in faceJobStates:
+                                                        faceJobStates[objectId]["list_face"].append(faceCrop.copy())
+                                                startThread = Process(target=runRecognitionJob, args=(objectId, faceJobStates,))
+                                                startThread.daemon = True
+                                                if objectId in faceJobStates:
+                                                    faceJobStates[objectId]["pid"] = startThread.pid
+                                                startThread.start()
+                                            else:
+                                                displayText(frame, x, y, w, light, False, angle, lowSpeed, blur, Color)
+                                        else:
+                                            displayText(frame, x, y, w, light, False, angle, lowSpeed, blur, Color)
 
-                                elif state["step"] >= countThread:
-                                    names = state["result"]
-                                    if len(names) == countThread and names.count(None) == 0 and len(set(names)) == 1:
-                                        trackName[objectId] = names[0]
-                                        if not state["success"]:
-                                            faceJobStates[objectId]["success"] = True
-                                            killJob(objectId)
-                                            updateInfo(state["code"], faceCrop)
-                                            log(f"[ID {objectId}] Thành công: {names[0]}")
-                                    else:
-                                        log(f"[ID {objectId}] → reset lại")
-                                        faceJobStates[objectId] = manager.dict({
-                                            "step": 0,
-                                            "result": manager.list(),
-                                            "code": None,
-                                            "last_frame": None,
-                                            "success": False,
-                                            "list_face": manager.list(),
-                                            "pid": None
-                                        })
+                                    elif state["step"] < countThread and startThread.is_alive():
+                                        if len(state["list_face"]) < countThread:
+                                            if angle and lowSpeed:
+                                                if blur:
+                                                    imgOpt = motionBlurCompensation(faceCrop)
+                                                    blur = checkBlurry(imgOpt)
+                                                    faceCrop = imgOpt
+                                                if not blur:
+                                                    if objectId in faceJobStates:
+                                                        faceJobStates[objectId]["list_face"].append(faceCrop.copy())
+
+                                    elif state["step"] >= countThread:
+                                        names = state["result"]
+                                        if len(names) == countThread and names.count(None) == 0 and len(set(names)) == 1:
+                                            trackName[objectId] = names[0]
+                                            if not state["success"]:
+                                                if objectId in faceJobStates:
+                                                    faceJobStates[objectId]["success"] = True
+                                                updateInfo(state["code"], faceCrop)
+                                                log(f"[ID {objectId}] Thành công: {names[0]}")
+                                        else:
+                                            log(f"[ID {objectId}] → reset lại")
+                                            if objectId in faceJobStates:
+                                                faceJobStates[objectId] = manager.dict({
+                                                    "step": 0,
+                                                    "result": manager.list(),
+                                                    "code": None,
+                                                    "last_frame": None,
+                                                    "success": False,
+                                                    "list_face": manager.list(),
+                                                    "pid": None
+                                                })
+                            else:
+                                turnOn()
+
+                        name = trackName.get(objectId, "Checking..." if state["step"] > 0 else "New")
+                        if(state["success"]):
+                            name = 'Success'
+                            wColor = Color.White
+                            bColor = (65, 169, 35)
                         else:
-                            turnOn()
-                    name = trackName.get(objectId, "Checking..." if state["step"] > 0 else "New")
-                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-                    if(state["success"]):
-                        text = 'Success'
-                        (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
-                        cv2.rectangle(frame, (x - 15, y - textHeight -15), (x + textWidth + 15, y), (65, 169, 35), -1)
-                        cv2.putText(frame, text, (x, int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.8, Color.White, 2)
-                    else:
-                        cv2.putText(frame, f"{name} (ID {objectId})", (x, y - 10),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                        displayText(frame, x, y, w, light, False, True, True, False, Color)
+                            if name == "New":
+                                wColor = Color.White
+                                bColor = Color.Red
+                            elif name == "Checking...":
+                                wColor = Color.White
+                                bColor = (75, 172, 249)
+                            else:
+                                wColor = Color.White
+                                bColor = (65, 169, 35)
+                            displayText(frame, x, y, w, light, False, True, True, False, Color)
+                        (textWidth, textHeight), _ = cv2.getTextSize(name, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+                        cv2.rectangle(frame, (x - 15, y - textHeight -15), (x + textWidth + 15, y), bColor, -1)
+                        cv2.putText(frame, name, (x, int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.7, wColor, 2)
             else:
-                turnOff()
-                faceJobStates = {}
-                trackName = {}
-                faceSpeedTrackers = {}
+                if worked:
+                    worked = False
+                    tracker.reset()
+                    for objectId in faceJobStates.keys():
+                        killJob(objectId)
+                    faceJobStates = manager.dict()
+                    trackName = {}
+                    faceSpeedTrackers = {}
 
-            frame = cv2.resize(frame, (480, 360), interpolation=cv2.INTER_LANCZOS4)
+            # frame = cv2.resize(frame, (480, 360), interpolation=cv2.INTER_LANCZOS4)
             if sleepTimer >= datetime.now():
                 #subprocess.run(["xset", "dpms", "force", "on"])
-                cv2.putText(frame, f"FPS: {fps}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                # cv2.putText(frame, f"FPS: {fps}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                 cv2.namedWindow("Face Tracking + Recognition", cv2.WINDOW_NORMAL)
                 cv2.setWindowProperty("Face Tracking + Recognition", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
                 cv2.imshow("Face Tracking + Recognition", frame)
