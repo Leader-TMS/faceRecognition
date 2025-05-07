@@ -110,6 +110,7 @@ if __name__ == "__main__":
         ('013', 'RF004', 'Huỳnh Khánh Tuyên', 'Khánh Tuyên', '2004-05-25', 'F', 'daolam1568@gmail.com', '0123344556', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
         ('014', 'RF004', 'Nguyễn Văn Hiếu', 'Văn Hiếu', '2004-05-25', 'M', 'hieunguyen130701iuh@gmail.com', '0123344556', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
         ('015', 'RF004', 'Trần Mạc Anh Tuyên', 'Anh Tuyên', '2004-05-25', 'M', 'acetuhoang@gmail.com', '0123344556', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
+        ('016', 'RF004', 'Thái Văn Quý', 'Văn Quý', '2004-05-25', 'M', 'acetuhoang@gmail.com', '0123344556', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
     ]
 
     cursor.executemany('''
