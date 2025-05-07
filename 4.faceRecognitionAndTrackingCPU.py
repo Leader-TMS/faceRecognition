@@ -26,6 +26,12 @@ from tempfile import NamedTemporaryFile
 import subprocess
 import signal
 import time
+import requests
+from collections import deque
+session = requests.Session() 
+from PIL import ImageFont, ImageDraw, Image
+import socket
+
 mtcnn = MTCNN(margin=40, select_largest=False, selection_method='probability', keep_all=True, min_face_size=40, thresholds=[0.7, 0.8, 0.8])
 # inceptionModel = InceptionResnetV1(pretrained='vggface2').eval()
 # tracedModel = torch.jit.trace(inceptionModel, torch.randn(1, 3, 112, 112))
@@ -33,6 +39,7 @@ mtcnn = MTCNN(margin=40, select_largest=False, selection_method='probability', k
 # tracedModel.save('inception_resnet_v1_traced.pt')
 
 tracedModel = torch.jit.load('tracedModel/inceptionResnetV1Traced.pt')
+torch.set_grad_enabled(False)
 svmModel = joblib.load('svmModel.pkl')
 labelEncoder = joblib.load('labelEncoder.pkl')
 
@@ -70,6 +77,32 @@ class Color:
     Silver = (192, 192, 192)
     Gold = (0, 215, 255)
 
+class RateLimiter:
+    def __init__(self, maxRequests, perSeconds):
+        self.maxRequests = maxRequests
+        self.perSeconds = perSeconds
+        self.requestTimes = deque()
+        self.rejected = 0
+        self.lastResetTime = int(time.time())
+
+    def allow(self):
+        now = time.time()
+        
+        currentSecond = int(now)
+        if currentSecond > self.lastResetTime:
+            self.rejected = 0
+            self.lastResetTime = currentSecond
+
+        while self.requestTimes and self.requestTimes[0] <= now - self.perSeconds:
+            self.requestTimes.popleft()
+
+        if len(self.requestTimes) < self.maxRequests:
+            self.requestTimes.append(now)
+            return True
+        else:
+            self.rejected += 1
+            return False
+
 # Setup Data
 setTrackerName = {}
 seeRFID = False
@@ -98,6 +131,7 @@ cameraOpenError = config['settingTypeText']["CAMERA_OPEN_ERROR"]
 imageUnclear = config['settingTypeText']["IMAGE_UNCLEAR"]
 badAngle = config['settingTypeText']["BAD_ANGLE"]
 auth = config['settingTypeText']["AUTHENTICATION"]
+urlGetEmbedding = config['settingApi']["URL_GET_EMBEDDING"]
 
 reading= False
 roi_x1, roi_y1, roi_x2, roi_y2 = 250, 250, 600, 350
@@ -107,6 +141,42 @@ objTypeText = {}
 objCheckName = {}
 resetCallTTS = datetime.now()
 stopThread = False
+lightStatus = False
+rateLimiter = RateLimiter(10, 1)
+
+def turnOn():
+    global lightStatus
+    try:
+        if not lightStatus:
+            print('ON')
+            lightStatus = True
+            subprocess.run(
+                ['sudo', 'python', 'turnOn.py'],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+    except subprocess.CalledProcessError as e:
+        print("Lỗi khi thực thi lệnh:", e)
+        print("stdout:", e.stdout.decode())
+        print("stderr:", e.stderr.decode())
+
+def turnOff():
+    global lightStatus
+    try:
+        if lightStatus:
+            print('OFF')
+            lightStatus = False
+            subprocess.run(
+                ['sudo', 'python', 'turnOff.py'],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+    except subprocess.CalledProcessError as e:
+        print("Lỗi khi thực thi lệnh:", e)
+        print("stdout:", e.stdout.decode())
+        print("stderr:", e.stderr.decode())
 
 def checkKillProcess():
     objData = list(objTypeText.items())
@@ -142,7 +212,6 @@ def generateAndPlayAudio(text, speed, typeId):
 
     if speed != 1.0:
         audio = audio.speedup(playback_speed=speed)
-    audio = audio + 10
     f = NamedTemporaryFile("w+b", suffix=".wav", delete=False)
     audio.export(f.name, "wav")
     process = subprocess.Popen(["ffplay", "-nodisp", "-autoexit", "-hide_banner", "-loglevel", "quiet", f.name])
@@ -195,8 +264,9 @@ def waitFullName():
 
 def updateInfo(employeeCode, image):
     global resetCallTTS, stopThread
-    fullName = getEmployeesByCode(employeeCode)["short_name"]
-    if  fullName:
+    employee = getEmployeesByCode(employeeCode)
+    if employee is not None:
+        fullName = employee["short_name"]
         if employeeCode not in objCheckName:
             stopThread = True
             resetCallTTS = datetime.now()
@@ -221,6 +291,35 @@ def saveFaceDirection(image, folderName):
         target_file_name = os.path.join(folderName, f'{current_time}.jpg')
         cv2.imwrite(target_file_name, image)
 
+def getEmbedding(imageVar, laravelUrl):
+    try:
+        global session
+        if not isinstance(imageVar, np.ndarray):
+            return {'error': 'imageVar phải là numpy.ndarray (OpenCV RGB image)'}
+
+        _, imgEncoded = cv2.imencode('.jpg', imageVar, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        imgBytes = io.BytesIO(imgEncoded.tobytes())
+        imgBytes.seek(0)
+        files = {'image': ('image.jpg', imgBytes, 'image/jpeg')}
+
+        if session is None:
+            session = requests.Session()
+
+        response = session.post(laravelUrl, files=files, timeout=3)
+
+        if response.ok:
+            result = response.json()
+            if 'embedding' in result:
+                return result
+            else:
+                return {'error': 'Không có embedding trong response từ server'}
+        else:
+            return {'error': 'Request failed', 'status': response.status_code}
+            
+    except Exception as e:
+        print(e)
+        return {'error': str(e)}
+    
 def faceAuthentication(frame):
     try:
         label = "Unknown"
@@ -233,32 +332,40 @@ def faceAuthentication(frame):
             frame = cv2.resize(frame, (wFace, hFace), interpolation=cv2.INTER_LANCZOS4)
 
             faceRgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            faceMtcnn = mtcnn(faceRgb)
+            start = time.time()
+            if rateLimiter.allow():
+                embeddingResponse = getEmbedding(faceRgb, urlGetEmbedding)
+            else:
+                return label, employeeCode
+            end = time.time()
+            totalTime = end - start
+            # print(f'totalTime: {totalTime}')
+            if 'error' in embeddingResponse:
+                print(f"Embedding error: {embeddingResponse['error']}")
+                label = "Error"
+                employeeCode = None
+            else:
+                embedding = embeddingResponse["embedding"]
 
-            if faceMtcnn is not None and len(faceMtcnn) > 0:
-                for _, face in enumerate(faceMtcnn):
-                    with torch.no_grad():
-                        # embedding = inceptionModel(face.unsqueeze(0)).detach().cpu().numpy().flatten()
-                        embedding = tracedModel(face.unsqueeze(0)).detach().cpu().numpy().flatten()
+                embedding = normalize([embedding])
 
-                    embedding = normalize([embedding])
+                labelIndex = svmModel.predict(embedding)[0]
 
-                    labelIndex = svmModel.predict(embedding)[0]
+                prob = svmModel.predict_proba(embedding)[0]
 
-                    prob = svmModel.predict_proba(embedding)[0]
+                probPercent = round(prob[labelIndex], 2)
+                print(f'probPercent: {probPercent}')
+                if probPercent >= 0.75:
+                    employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
+                    employeeCode = getEmployeesByCode(employeeCode)
+                    if employeeCode:
+                        label = employeeCode['short_name']
+                        employeeCode = employeeCode['employee_code']
+                else:
+                    saveFaceDirection(frame, "evidences/invalid")
+                    label = "Unknown"
+                    employeeCode = None
 
-                    probPercent = round(prob[labelIndex], 2)
-
-                    if probPercent >= 0.75:
-                        employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
-                        employeeCode = getEmployeesByCode(employeeCode)
-                        if employeeCode:
-                            label = employeeCode['short_name']
-                            employeeCode = employeeCode['employee_code']
-                    else:
-                        saveFaceDirection(frame, "evidences/invalid")
-                        label = "Unknown"
-                        employeeCode = None
     except RuntimeError as e:
             textToSpeech(f"Lỗi xác thực khuôn mặt", 1.2, faceAuthError)
             saveFaceDirection(frame, "evidences/error")
@@ -269,14 +376,18 @@ def faceAuthentication(frame):
 def getNameFace(frame = None, trackerId = None):
     if frame is not None and frame.size > 0:
         trackerName, employeeCode = faceAuthentication(frame)
-        if isinstance(trackerName, str) and trackerName != "Unknown":
-            setTrackerName[trackerId]["name"] = trackerName
-            setTrackerName[trackerId]["employeeCode"] = employeeCode
-            setTrackerName[trackerId]["Known"] = setTrackerName[trackerId]["Known"] + 1
-        else:
-            setTrackerName[trackerId]["name"] = "Unknown"
-            setTrackerName[trackerId]["employeeCode"] = None
-            setTrackerName[trackerId]["Unknown"] = setTrackerName[trackerId]["Unknown"] + 1
+        print(f'getNameFace: {trackerName} - {employeeCode}')
+        if trackerId in setTrackerName:
+            if isinstance(trackerName, str) and trackerName != "Unknown":
+                setTrackerName[trackerId]["name"] = trackerName
+                setTrackerName[trackerId]["employeeCode"] = employeeCode
+                setTrackerName[trackerId]["Known"] = setTrackerName[trackerId]["Known"] + 1
+            else:
+                setTrackerName[trackerId]["name"] = "Unknown"
+                setTrackerName[trackerId]["employeeCode"] = None
+                setTrackerName[trackerId]["Unknown"] = setTrackerName[trackerId]["Unknown"] + 1
+    if trackerId in setTrackerName:
+        setTrackerName[trackerId]["threadingDone"] +=1
 
 def scanRFID():
     global inputRFID, seeRFID
@@ -388,9 +499,11 @@ def detectionAndTracking(frame):
 
                 hframe, wframe = faceDetected.shape[:2]
                 light = checkLight(frame[y:y+h, x:x+w])
+                if not light:
+                    turnOn()
                 goodAngle = goodFaceAngle(frame[y:y+h, x:x+w], wframe, hframe)
                 blur = checkBlurry(frame[y:y+h, x:x+w])
-                
+
                 if  wframe >= 55 and wframe < 65:
                     smallFace.append(0)
                 elif wframe >= 65:
@@ -405,7 +518,7 @@ def detectionAndTracking(frame):
                         arrFaceTracking.append(1)
                     else:
                         for key, (bbox1, bbox2, _, _, _, _) in list(trackers.items()):
-                            print(f'speed: {abs(x - bbox1[0]) / 1}')
+                            # print(f'speed: {abs(x - bbox1[0]) / 1}')
                             lowSpeed = abs(x - bbox1[0]) / 1 <= 5
                             scaleX2, scaleY2, scaleW2, scaleH2 = bbox2
                             inside = isInsideRectangle(x, y, w, h, scaleX2, scaleY2, scaleW2, scaleH2)
@@ -422,7 +535,7 @@ def detectionAndTracking(frame):
                                     trackers[newKey] = ((x, y, w, h), (scaleX, scaleY, scaleW, scaleH), light, goodAngle, lowSpeed, blur)
                                     arrFaceTracking.append(newKey)
                     # cv2.rectangle(frame, (scaleX, scaleY), (scaleX + scaleW, scaleY + scaleH), (0, 255, 0), 2)
-        
+
         if len(smallFace):
             if 1 in smallFace:
                 arrFaceTracking = set(arrFaceTracking)
@@ -469,11 +582,7 @@ def checkBlurry(image, threshold=100):
 
 def compareAkaze(image1, image2):
     if image1 is not None and image2 is not None and image1.size > 0 and image2.size > 0:
-        # hFace1, wFace1 = image1.shape[:2]
-        # hFace2, wFace2 = image2.shape[:2]
-        # if hFace1 < 65 or wFace1 < 65 or hFace2 < 65 or wFace2 < 65:
-        #     return 0
-        # else:
+
         img1 = cv2.cvtColor(image1, cv2.COLOR_BGR2GRAY)
         img2 = cv2.cvtColor(image2, cv2.COLOR_BGR2GRAY)
 
@@ -524,27 +633,33 @@ def corruptImageDetected(image):
     else:
         return False
     
-def textToSpeechSleep(text, speed=1.0):
-    tts = gTTS(text=text, lang='vi', slow=False)
-    fp =io.BytesIO()
-    tts.write_to_fp(fp)
-    fp.seek(0)
-    
-    audio = AudioSegment.from_mp3(fp)
+def textToSpeechSleep(inputData, speed=1.0):
+    isFile = False
+    if os.path.isfile(inputData):
+        isFile = True
+        audio = AudioSegment.from_file(inputData)
+    else:
+        tts = gTTS(text=inputData, lang='vi', slow=False)
+        fp =io.BytesIO()
+        tts.write_to_fp(fp)
+        fp.seek(0)
+        
+        audio = AudioSegment.from_mp3(fp)
 
     if speed != 1.0:
         audio = audio.speedup(playback_speed=speed)
     play(audio)
-
-    del fp
-    del audio
-    del tts
+    if not isFile:
+        del fp
+        del audio
+        del tts
     videoCapture()
 
 def motionBlurCompensation(image):
-    blurred = cv2.GaussianBlur(image, (21, 21), 0)
-    sharpened = cv2.addWeighted(image, 1.5, blurred, -0.5, 0)
-    
+    sharpened = image
+    if image is not None and image.size > 0:
+        blurred = cv2.GaussianBlur(image, (21, 21), 0)
+        sharpened = cv2.addWeighted(image, 1.5, blurred, -0.5, 0)
     return sharpened
 
 def displayText(frame, x, y, w, light, angle, lowSpeed, blur, color):
@@ -568,6 +683,33 @@ def displayText(frame, x, y, w, light, angle, lowSpeed, blur, color):
             
             textY += textHeight + 18
 
+
+def drawTextVietnamese(img, text, position, fontPath='fonts/Roboto-Regular.ttf', fontSize=20, color=(255, 255, 255)):
+    imgPIL = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(imgPIL)
+
+    font = ImageFont.truetype(fontPath, fontSize)
+
+    bbox = draw.textbbox((0, 0), text, font=font)
+    textWidth = bbox[2] - bbox[0]
+    textHeight = bbox[3] - bbox[1]
+
+    x, y = position
+
+    draw.rectangle([(x - 15, y - textHeight - 12), (x + textWidth + 12, y)], fill=(65, 169, 35))
+
+    draw.text((x, y - textHeight - 10), text, font=font, fill=color)
+
+    return cv2.cvtColor(np.array(imgPIL), cv2.COLOR_RGB2BGR)
+
+def checkInternet(host="8.8.8.8", port=53, timeout=3):
+    try:
+        socket.setdefaulttimeout(timeout)
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
+        return True
+    except socket.error:
+        return False
+    
 def videoCapture():
     global checkTimeRecognition, trackingIdAssign, imageHash, setTrackerName, trackers
 
@@ -578,8 +720,6 @@ def videoCapture():
     cap = cv2.VideoCapture(0)
 
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-    # 0.75 ON
-    # 0.25 OFF
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
@@ -589,6 +729,11 @@ def videoCapture():
     sleepTimer = datetime.now()
     second = 0
     countSecond = 0
+    if not checkInternet():
+        cap.release()
+        cv2.destroyAllWindows()
+        textToSpeechSleep("./noInternet.wav", 1.2)
+
     if not cap.isOpened():
         cap.release()
         cv2.destroyAllWindows()
@@ -611,6 +756,7 @@ def videoCapture():
             if len(detections):
 
                 sleepTimer = datetime.now() + timedelta(minutes=1)
+
                 for key, (bbox, ligth, angle, lowSpeed, blur) in list(detections.items()):
                     trackerId = key
                     x, y, w, h = bbox
@@ -633,27 +779,28 @@ def videoCapture():
                         trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
 
                     if trackingIdAssign not in setTrackerName:
-                        setTrackerName[trackingIdAssign] = {"name": "Unknown", "employeeCode": None, "Unknown": 0, "Known": 0, "timekeeping": False, "numCheck": 0}
-                    
+                        setTrackerName[trackingIdAssign] = {"name": "Unknown", "employeeCode": None, "Unknown": 0, "Known": 0, "timekeeping": False, "numCheck": 0, "threading" : 0, "threadingDone": 0}
                     if setTrackerName[trackingIdAssign]["numCheck"] >= 4:
-                        if setTrackerName[trackingIdAssign]["timekeeping"]:
-                            trackingIdAssign = findNextLarger(arrTrackerId, trackingIdAssign)
-                        else:
-                            if setTrackerName[trackingIdAssign]["name"] != "Unknown":
-                                percentage = round((setTrackerName[trackingIdAssign]['Unknown'] / setTrackerName[trackingIdAssign]['Known']) * 100, 2)
-                                if percentage <= 33.3:
-                                    setTrackerName[trackingIdAssign]["timekeeping"] = True
-                                    (x, y, w, h), _, _, _, _= arrDetection[trackingIdAssign]
-                                    updateInfo(setTrackerName[trackingIdAssign]['employeeCode'], originalFrame[y:y+h, x:x+w])
-                                    trackingIdAssign = findNextLarger(arrTrackerId, trackingIdAssign)
+                        if setTrackerName[trackingIdAssign]["threading"] == setTrackerName[trackingIdAssign]["threadingDone"]:
+                            if setTrackerName[trackingIdAssign]["timekeeping"]:
+                                trackingIdAssign = findNextLarger(arrTrackerId, trackingIdAssign)
+                            else:
+                                print(setTrackerName[trackingIdAssign]["name"])
+                                if setTrackerName[trackingIdAssign]["name"] != "Unknown":
+                                    percentage = round((setTrackerName[trackingIdAssign]['Unknown'] / setTrackerName[trackingIdAssign]['Known']) * 100, 2)
+                                    if percentage <= 33.3:
+                                        setTrackerName[trackingIdAssign]["timekeeping"] = True
+                                        (x, y, w, h), _, _, _, _= arrDetection[trackingIdAssign]
+                                        updateInfo(setTrackerName[trackingIdAssign]['employeeCode'], originalFrame[y:y+h, x:x+w])
+                                        trackingIdAssign = findNextLarger(arrTrackerId, trackingIdAssign)
+                                    else:
+                                        imageHash = None
+                                        trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
                                 else:
                                     imageHash = None
                                     trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
-                                    # textToSpeech('Chưa nhận diện được', 1.2, auth)
-                            else:
-                                imageHash = None
-                                trackingIdAssign = delAndFindNextLarger(arrTrackerId, trackingIdAssign)
-                                # textToSpeech('Chưa nhận diện được', 1.2, auth)
+                        else:
+                            print("Wait threading")
                     else:
                         isOther = False
                         (x, y, w, h), ligth, angle, lowSpeed, blur = arrDetection[trackingIdAssign]
@@ -673,7 +820,6 @@ def videoCapture():
                                     corruptImage = corruptImageDetected(resizeFace)
 
                                     if corruptImage:
-                                        # textToSpeech("Ảnh bị mờ", 1.2, imageUnclear)
                                         print("Ảnh bị mờ")
                                     else:
                                         isCompare = compareAkaze(imageHash, resizeFace)
@@ -690,8 +836,12 @@ def videoCapture():
                                                 else:
                                                     setTrackerName[trackingIdAssign]["Unknown"] = setTrackerName[trackingIdAssign]["Unknown"] + 1
                                 if isOther:
-                                    # textToSpeech('Bắt đầu nhận diện', 1.2, auth)
-                                    getNameFace(resizeFace, trackingIdAssign)
+                                    setTrackerName[trackingIdAssign]["threading"] += 1
+                                    print(f'[{trackingIdAssign}] numCheck: {setTrackerName[trackingIdAssign]["numCheck"]}')
+                                    startThread = threading.Thread(target=getNameFace, args=(resizeFace, trackingIdAssign,))
+                                    startThread.daemon = True
+                                    startThread.start()
+                                    # getNameFace(resizeFace, trackingIdAssign)
                         setTrackerName[trackingIdAssign]["numCheck"] += 1
 
                     checkTimeRecognition = datetime.now()
@@ -699,20 +849,10 @@ def videoCapture():
                     x, y, w, h = bbox
                     if key in setTrackerName:
                         if setTrackerName[key]["timekeeping"]:
-                            text = 'Success'
-                            (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
-                            cv2.rectangle(frame, (x - 15, y - textHeight -15), (x + textWidth + 15, y), (65, 169, 35), -1)
-                            cv2.putText(frame, text, (x, int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.8, color.White, 2)
+                            text = setTrackerName[key]["name"]
+                            frame = drawTextVietnamese(frame, text, (x, y), fontPath='fonts/montserrat.bold.ttf', fontSize=22, color=color.White)
                         else:
                             displayText(frame, x, y, w, ligth, angle, lowSpeed, blur, color)
-                            # if not ligth:
-                            # if not angle:
-                            # if not lowSpeed:
-                            # if blur:
-                            # text = f"{'look straight' if not angle else ''} {'slow down' if not lowSpeed else ''} {'blur' if blur else ''}"
-                            # (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
-                            # cv2.rectangle(frame, (x - 10, y - textHeight - 15), (x + textWidth + 10, y), color.Red, -1)
-                            # cv2.putText(frame, text, (x, int(y - 10)), cv2.FONT_HERSHEY_DUPLEX, 0.8, color.White, 2)
                     # cv2.rectangle(frame, (x, y), (x + w, y + h), color.Green, 2)
             else:
                 trackers = {}
@@ -728,23 +868,21 @@ def videoCapture():
             else:
                 countSecond+=1
 
-            text = f'FPS: {fps} - {trackingIdAssign}'
+            # text = f'FPS: {fps} - {trackingIdAssign}'
 
-            (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
-            x, y = 30, 30
+            # (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+            # x, y = 30, 30
 
-            cv2.rectangle(frame, (x - 10, y - textHeight - 10), (x + textWidth + 10, y + 10), (167, 80, 167), -1)
-            cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color.White, 2)
-            # if sleepTimer >= datetime.now():
-                # subprocess.run(["xset", "dpms", "force", "on"])
-                # cv2.namedWindow("ByteTrack", cv2.WINDOW_NORMAL)
-                # cv2.setWindowProperty("ByteTrack", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-                # cv2.imshow("ByteTrack", frame)
-            # else:
-                # cv2.destroyAllWindows()
-                # subprocess.run(["xset", "dpms", "force", "off"])
-            # frame = cv2.resize(frame, (480, 360), interpolation=cv2.INTER_LANCZOS4)
-            cv2.imshow("ByteTrack", frame)
+            # cv2.rectangle(frame, (x - 10, y - textHeight - 10), (x + textWidth + 10, y + 10), (167, 80, 167), -1)
+            # cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color.White, 2)
+            if sleepTimer >= datetime.now():
+                cv2.namedWindow("Face Tracking + Recognition", cv2.WINDOW_NORMAL)
+                cv2.setWindowProperty("Face Tracking + Recognition", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+                cv2.imshow("Face Tracking + Recognition", frame)
+            else:
+                cv2.destroyAllWindows()
+                turnOff()
+            # cv2.imshow("ByteTrack", frame)
         if cv2.waitKey(10) & 0xFF == ord('q'):
             cap.release()
             cv2.destroyAllWindows()
@@ -754,19 +892,6 @@ def videoCapture():
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    # scanRFIDThread = threading.Thread(target=scanRFID)
-    # scanRFIDThread.daemon = True
-    # scanRFIDThread.start()
-
-    # videoCaptureThread = threading.Thread(target=videoCapture)
-    # videoCaptureThread.start()
-    # videoCaptureThread.join()
     videoCapture()
+    turnOff()
     print("All processes finished.")
-
-# try:
-# except Exception as e:
-#     print(f"An error occurred: {e}")
-#     textToSpeech("Lỗi phát hiện khuôn mặt, Vui lòng liên hệ Admin", 1.2)
-# finally:
-#     return data
