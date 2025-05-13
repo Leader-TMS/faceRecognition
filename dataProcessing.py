@@ -1,6 +1,9 @@
 import sqlite3
 from datetime import datetime
 import requests
+import threading
+import time
+import socket
 
 def getEmployeesByCode(employeeCode):
     conn = sqlite3.connect('employee.db')
@@ -35,6 +38,19 @@ def getEmployeesByRFID(rfid):
 
     return employee
 
+
+def isPortOpen(host, port=80, timeout=0.2):
+    # HTTP 80
+    # HTTPS 443
+    try:
+        start = time.time()
+        with socket.create_connection((host, port), timeout=timeout):
+            print(f"isPortOpen: {time.time() - start}")
+            return True
+    except Exception as e:
+        print(e)
+        return False
+    
 def saveAttendance(checkBy, employeeCode, uniqueId):
     try:
         conn = sqlite3.connect('employee.db')
@@ -58,7 +74,7 @@ def saveAttendance(checkBy, employeeCode, uniqueId):
             ''', (employeeId, createdAt, updatedAt, None)) 
             conn.commit()
             conn.close()
-
+            
             url = 'http://api.tanthanhdat.local/api/post/run/job/save-attendance-job'
             dataSave = {
                 "employee_id": employeeId,
@@ -68,8 +84,12 @@ def saveAttendance(checkBy, employeeCode, uniqueId):
                 "unique_id": uniqueId
             }
 
-            requests.post(url, data = dataSave)
+            thread = threading.Thread(target=requests.post, args=(url,), kwargs={'data': dataSave})
+            thread.daemon = True
+            thread.start()
+            # requests.post(url, data = dataSave)
     except Exception as e:
+        print(f"saveAttendance: {e}")
         return False
     return True
 
