@@ -82,7 +82,7 @@ def downloadFiles(bucket = bucket_name, localDirectory = local_directory):
 
 def uploadFiles(bucket=bucket_name, localDirectory=local_directory):
     localFilesInfo = getLocalFilesInfo(localDirectory)
-    s3FilesInfo = getS3FilesInfo(bucket, 'dataset/')
+    s3FilesInfo = getS3FilesInfo(bucket, folder_prefix)
     filesToUpload = [
         localFile for localFile, localMtime in localFilesInfo.items()
         if localDirectory + localFile not in s3FilesInfo or s3FilesInfo[localDirectory + localFile] < localMtime
@@ -92,7 +92,7 @@ def uploadFiles(bucket=bucket_name, localDirectory=local_directory):
     item = 1
     for localFile in filesToUpload:
         localPath = os.path.join(localDirectory, localFile)
-        s3Key = f'dataset/{localFile}'
+        s3Key = f'{folder_prefix}{localFile}'
 
         # Lấy thư mục chứa file local
         localDir = os.path.dirname(localPath)
