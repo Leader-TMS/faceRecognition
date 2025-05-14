@@ -50,7 +50,15 @@ def isPortOpen(host, port=80, timeout=0.2):
     except Exception as e:
         print(e)
         return False
-    
+
+def postAsync(url, **kwargs):
+    try:
+        response = requests.post(url, timeout=1.5, **kwargs)
+        response.raise_for_status()
+        print("POST success")
+    except requests.exceptions.RequestException as e:
+        print(f"saveAttendance ERROR: {e}")
+
 def saveAttendance(checkBy, employeeCode, uniqueId):
     try:
         conn = sqlite3.connect('employee.db')
@@ -84,7 +92,7 @@ def saveAttendance(checkBy, employeeCode, uniqueId):
                 "unique_id": uniqueId
             }
 
-            thread = threading.Thread(target=requests.post, args=(url,), kwargs={'data': dataSave})
+            thread = threading.Thread(target=postAsync, args=(url,), kwargs={'data': dataSave})
             thread.daemon = True
             thread.start()
             # requests.post(url, data = dataSave)

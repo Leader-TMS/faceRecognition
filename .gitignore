@@ -19,3 +19,5 @@
 /__pycache__
 /employee.db
 /logs
+/embeddings
+/index

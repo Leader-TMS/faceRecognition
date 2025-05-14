@@ -38,11 +38,13 @@ import requests
 from PIL import ImageFont, ImageDraw, Image, ImageTk
 from pathlib import Path
 from tkinter import Tk, Canvas, PhotoImage, Label
-
+import faiss
 tracedModel = torch.jit.load('tracedModel/inceptionResnetV1Traced.pt')
 torch.set_grad_enabled(False)
 svmModel = joblib.load('svmModel.pkl')
 labelEncoder = joblib.load('labelEncoder.pkl')
+index = faiss.read_index('index/faiss.index')
+ids = joblib.load('index/ids.pkl')
 
 #Setup mediapipe
 mpFaceMesh = mp.solutions.face_mesh
@@ -293,84 +295,76 @@ def faceRecognition(faceImage):
 
             end = time.time()
             totalTime = end - start
-            log(f'totalTime: {totalTime}')
+            log(f'time get Embedding: {totalTime}')
             if 'error' in embRes:
                 log(f"Embedding error: {embRes['error']}", True)
                 mtcnn = MTCNN(margin=40, select_largest=False, selection_method='probability', keep_all=True, min_face_size=40, thresholds=[0.7, 0.8, 0.8])
                 faceMtcnn = mtcnn(faceRgb)
                 if faceMtcnn is not None and len(faceMtcnn) > 0:
                     for _, face in enumerate(faceMtcnn):
-                        log(f"faceRecognition 1: {len(faceMtcnn)}")
-                        start =  time.time()
                         with torch.no_grad():
                             embedding = tracedModel(face.unsqueeze(0)).detach().cpu().numpy().flatten()
-                        end = time.time() 
-                        totalTime = end - start
-                        log(f"faceRecognition 2: {totalTime}")
             else:
                 embedding = embRes["embedding"]
 
             if embedding is not None:
-
-                embedding = normalize([embedding])
-
-                labelIndex = svmModel.predict(embedding)[0]
-
-                prob = svmModel.predict_proba(embedding)[0]
-
-                probPercent = round(prob[labelIndex], 2)
-                print(f"probPercent: {probPercent}")
-                if probPercent >= 0.75:
-                    employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
+                start = time.time()
+                embedding = np.array(embedding, dtype='float32')
+                embedding = normalize(embedding.reshape(1, -1)).astype('float32')
+                D, I = index.search(embedding, 1)
+                sim = D[0][0]
+                log(f"sim: {sim}")
+                log(f"search: {time.time() - start}")
+                if sim >= 0.75:
+                    employeeCode = ids[I[0][0]]
                     employeeCode = getEmployeesByCode(employeeCode)
                     if employeeCode:
                         label = employeeCode['short_name']
                         employeeCode = employeeCode['employee_code']
-                elif probPercent >= 0.5:
-                    employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
+                elif sim >= 0.5:
+                    employeeCode = ids[I[0][0]]
                     employeeCode = getEmployeesByCode(employeeCode)
                     if employeeCode:
                         label = employeeCode['short_name']
                         employeeCode = employeeCode['employee_code']
-                        saveFaceDirection(faceImage, f"evidences/almostSimilar/{employeeCode}_{label}/{probPercent}")
+                        saveFaceDirection(faceImage, f"evidences/almostSimilar/{employeeCode}_{label}/{sim}")
                     label = None
                     employeeCode = None
                 else:
                     saveFaceDirection(faceImage, "evidences/invalid")
                     label = None
                     employeeCode = None
+            # ---------------------------------
+            #     embedding = normalize([embedding])
+
+            #     labelIndex = svmModel.predict(embedding)[0]
+
+            #     prob = svmModel.predict_proba(embedding)[0]
+
+            #     probPercent = round(prob[labelIndex], 2)
+            #     print(f"probPercent: {probPercent}")
+            #     if probPercent >= 0.75:
+            #         employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
+            #         employeeCode = getEmployeesByCode(employeeCode)
+            #         if employeeCode:
+            #             label = employeeCode['short_name']
+            #             employeeCode = employeeCode['employee_code']
+            #     elif probPercent >= 0.5:
+            #         employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
+            #         employeeCode = getEmployeesByCode(employeeCode)
+            #         if employeeCode:
+            #             label = employeeCode['short_name']
+            #             employeeCode = employeeCode['employee_code']
+            #             saveFaceDirection(faceImage, f"evidences/almostSimilar/{employeeCode}_{label}/{probPercent}")
+            #         label = None
+            #         employeeCode = None
+            #     else:
+            #         saveFaceDirection(faceImage, "evidences/invalid")
+            #         label = None
+            #         employeeCode = None
             else:
                 label = None
                 employeeCode = None
-            # faceMtcnn = mtcnn(faceRgb)
-
-            # if faceMtcnn is not None and len(faceMtcnn) > 0:
-            #     for _, face in enumerate(faceMtcnn):
-            #         log(f"faceRecognition 1: {len(faceMtcnn)}")
-            #         start =  time.time()
-            #         with torch.no_grad():
-            #             embedding = tracedModel(face.unsqueeze(0)).detach().cpu().numpy().flatten()
-            #         end = time.time() 
-            #         totalTime = end - start
-            #         log(f"faceRecognition 2: {totalTime}")
-
-            #         embedding = normalize([embedding])
-
-            #         labelIndex = svmModel.predict(embedding)[0]
-
-            #         prob = svmModel.predict_proba(embedding)[0]
-
-            #         probPercent = round(prob[labelIndex], 2)
-            #         if probPercent >= 0.75:
-            #             employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
-            #             employeeCode = getEmployeesByCode(employeeCode)
-            #             if employeeCode:
-            #                 label = employeeCode['short_name']
-            #                 employeeCode = employeeCode['employee_code']
-            #         else:
-            #             saveFaceDirection(faceImage, "evidences/invalid")
-            #             label = None
-            #             employeeCode = None
     except RuntimeError as e:
             textToSpeech(f"Lỗi xác thực khuôn mặt", 1.2, faceAuthError)
             saveFaceDirection(faceImage, "evidences/error")
