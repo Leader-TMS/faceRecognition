@@ -278,6 +278,7 @@ def faceRecognition(faceImage):
         label = None
         employeeCode = None
         hFace, wFace = faceImage.shape[:2]
+        embedding = None
         if faceImage is not None and faceImage.size > 0:
             wFace = max(int(wFace * 0.4), 45)
             hFace = max(int(hFace * 0.4), 45)
@@ -294,11 +295,22 @@ def faceRecognition(faceImage):
             totalTime = end - start
             log(f'totalTime: {totalTime}')
             if 'error' in embRes:
-                log(f"Embedding error: {embRes['error']}")
-                label = None
-                employeeCode = None
+                log(f"Embedding error: {embRes['error']}", True)
+                mtcnn = MTCNN(margin=40, select_largest=False, selection_method='probability', keep_all=True, min_face_size=40, thresholds=[0.7, 0.8, 0.8])
+                faceMtcnn = mtcnn(faceRgb)
+                if faceMtcnn is not None and len(faceMtcnn) > 0:
+                    for _, face in enumerate(faceMtcnn):
+                        log(f"faceRecognition 1: {len(faceMtcnn)}")
+                        start =  time.time()
+                        with torch.no_grad():
+                            embedding = tracedModel(face.unsqueeze(0)).detach().cpu().numpy().flatten()
+                        end = time.time() 
+                        totalTime = end - start
+                        log(f"faceRecognition 2: {totalTime}")
             else:
                 embedding = embRes["embedding"]
+
+            if embedding is not None:
 
                 embedding = normalize([embedding])
 
@@ -307,7 +319,7 @@ def faceRecognition(faceImage):
                 prob = svmModel.predict_proba(embedding)[0]
 
                 probPercent = round(prob[labelIndex], 2)
-
+                print(f"probPercent: {probPercent}")
                 if probPercent >= 0.75:
                     employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
                     employeeCode = getEmployeesByCode(employeeCode)
@@ -327,6 +339,9 @@ def faceRecognition(faceImage):
                     saveFaceDirection(faceImage, "evidences/invalid")
                     label = None
                     employeeCode = None
+            else:
+                label = None
+                employeeCode = None
             # faceMtcnn = mtcnn(faceRgb)
 
             # if faceMtcnn is not None and len(faceMtcnn) > 0:
@@ -458,9 +473,9 @@ def textToSpeech(text, speed=1.0, typeId=1):
     try:
         if typeId not in objTypeText:
             objTypeText[typeId] = None
-            thread = threading.Thread(target=generateAndPlayAudio, args=(text, speed, typeId))
-            thread.daemon = True
-            thread.start()
+            # thread = threading.Thread(target=generateAndPlayAudio, args=(text, speed, typeId))
+            # thread.daemon = True
+            # thread.start()
         else:
             log(f"Process for typeId {typeId} is already running.")
     
@@ -1374,7 +1389,7 @@ def openCam():
         camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
         camera.set(cv2.CAP_PROP_EXPOSURE , -4)
         mpFaceDetection = mp.solutions.face_detection
-        faceDetection = mpFaceDetection.FaceDetection(min_detection_confidence=0.7, model_selection=1)
+        faceDetection = mpFaceDetection.FaceDetection(min_detection_confidence=0.5, model_selection=1)
         tracker = CentroidTracker(maxDisappeared=5, maxDistance=60, useCache=True, cacheLifetime=1.5, killJob=killJob)
         try:
             if not checkInternet():
