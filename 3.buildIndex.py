@@ -1,3 +1,4 @@
+# 3.buildIndex.py
 import os
 import numpy as np
 import faiss
@@ -15,6 +16,7 @@ def buildFaissIndex():
             allIds.extend([personName] * emb.shape[0])
 
     allEmbeddings = np.vstack(allEmbeddings).astype('float32')
+    faiss.normalize_L2(allEmbeddings)
     index = faiss.IndexFlatIP(allEmbeddings.shape[1])
     index.add(allEmbeddings)
 
