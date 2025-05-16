@@ -5,7 +5,9 @@ import time
 import os
 import math
 import datetime
-
+from insightface.app import FaceAnalysis
+app = FaceAnalysis(name='buffalo_sc')
+app.prepare(ctx_id=0)
 
 mpFaceMesh = mp.solutions.face_mesh
 faceMesh = mpFaceMesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence=0.5)
@@ -158,6 +160,7 @@ def cameraForward(frame, windowName = None, folderName = None):
                 hFace = hFace - minus
 
             faceImg = frame[yFace:hFace, xFace:wFace].copy()
+            faceAnalysis = app.get(faceImg)
             h, w = faceImg.shape[:2]
             if h != 160 and faceImg.size > 0 or w != 160 and faceImg.size > 0:
                 faceImgResized = cv2.resize(faceImg, (160, 160))
@@ -202,7 +205,7 @@ def cameraForward(frame, windowName = None, folderName = None):
 
             checkSave = drawEllipseForProgress(frame, xFace, yFace, wFace, hFace, looking)
             text = "Forward"
-            if checkSave:
+            if checkSave and faceAnalysis:
                 if y < -3.5:
                     checkAndSaveFace(y, "left", faceFilename, faceImgResized)
                     text = "Looking Left"

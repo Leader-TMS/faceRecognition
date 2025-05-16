@@ -39,6 +39,7 @@ from PIL import ImageFont, ImageDraw, Image, ImageTk
 from pathlib import Path
 from tkinter import Tk, Canvas, PhotoImage, Label
 import faiss
+from insightface.app import FaceAnalysis
 tracedModel = torch.jit.load('tracedModel/inceptionResnetV1Traced.pt')
 torch.set_grad_enabled(False)
 svmModel = joblib.load('svmModel.pkl')
@@ -46,6 +47,10 @@ labelEncoder = joblib.load('labelEncoder.pkl')
 index = faiss.read_index('index/faiss.index')
 ids = joblib.load('index/ids.pkl')
 
+app = FaceAnalysis(name='buffalo_sc')
+app.prepare(ctx_id=-1)
+index = faiss.read_index('index1/faiss.index')
+ids = joblib.load('index1/labels.pkl')
 #Setup mediapipe
 mpFaceMesh = mp.solutions.face_mesh
 faceMesh = mpFaceMesh.FaceMesh()
@@ -309,25 +314,27 @@ def faceRecognition(faceImage):
 
             if embedding is not None:
                 start = time.time()
-                embedding = np.array(embedding, dtype='float32')
-                embedding = normalize(embedding.reshape(1, -1)).astype('float32')
+                # embedding = np.array(embedding, dtype='float32')
+                # embedding = normalize(embedding.reshape(1, -1)).astype('float32')
+                embedding = np.array(embedding, dtype='float32').reshape(1, -1)
+                faiss.normalize_L2(embedding)
                 D, I = index.search(embedding, 1)
                 sim = D[0][0]
                 log(f"sim: {sim}")
                 log(f"search: {time.time() - start}")
-                if sim >= 0.75:
+                if sim >= 0.075:
                     employeeCode = ids[I[0][0]]
                     employeeCode = getEmployeesByCode(employeeCode)
                     if employeeCode:
                         label = employeeCode['short_name']
                         employeeCode = employeeCode['employee_code']
-                elif sim >= 0.5:
+                elif sim >= 0.065:
                     employeeCode = ids[I[0][0]]
                     employeeCode = getEmployeesByCode(employeeCode)
                     if employeeCode:
                         label = employeeCode['short_name']
                         employeeCode = employeeCode['employee_code']
-                        saveFaceDirection(faceImage, f"evidences/almostSimilar/{employeeCode}_{label}/{sim}")
+                        saveFaceDirection(faceImage, f"evidences/almostSimilar/{employeeCode}_{label}")
                     label = None
                     employeeCode = None
                 else:
@@ -335,33 +342,33 @@ def faceRecognition(faceImage):
                     label = None
                     employeeCode = None
             # ---------------------------------
-            #     embedding = normalize([embedding])
+                # embedding = normalize([embedding])
 
-            #     labelIndex = svmModel.predict(embedding)[0]
+                # labelIndex = svmModel.predict(embedding)[0]
 
-            #     prob = svmModel.predict_proba(embedding)[0]
+                # prob = svmModel.predict_proba(embedding)[0]
 
-            #     probPercent = round(prob[labelIndex], 2)
-            #     print(f"probPercent: {probPercent}")
-            #     if probPercent >= 0.75:
-            #         employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
-            #         employeeCode = getEmployeesByCode(employeeCode)
-            #         if employeeCode:
-            #             label = employeeCode['short_name']
-            #             employeeCode = employeeCode['employee_code']
-            #     elif probPercent >= 0.5:
-            #         employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
-            #         employeeCode = getEmployeesByCode(employeeCode)
-            #         if employeeCode:
-            #             label = employeeCode['short_name']
-            #             employeeCode = employeeCode['employee_code']
-            #             saveFaceDirection(faceImage, f"evidences/almostSimilar/{employeeCode}_{label}/{probPercent}")
-            #         label = None
-            #         employeeCode = None
-            #     else:
-            #         saveFaceDirection(faceImage, "evidences/invalid")
-            #         label = None
-            #         employeeCode = None
+                # probPercent = round(prob[labelIndex], 2)
+                # print(f"probPercent: {probPercent}")
+                # if probPercent >= 0.75:
+                #     employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
+                #     employeeCode = getEmployeesByCode(employeeCode)
+                #     if employeeCode:
+                #         label = employeeCode['short_name']
+                #         employeeCode = employeeCode['employee_code']
+                # elif probPercent >= 0.65:
+                #     employeeCode = labelEncoder.inverse_transform([labelIndex])[0]
+                #     employeeCode = getEmployeesByCode(employeeCode)
+                #     if employeeCode:
+                #         label = employeeCode['short_name']
+                #         employeeCode = employeeCode['employee_code']
+                #         saveFaceDirection(faceImage, f"evidences/almostSimilar/{employeeCode}_{label}")
+                #     label = None
+                #     employeeCode = None
+                # else:
+                #     saveFaceDirection(faceImage, "evidences/invalid")
+                #     label = None
+                #     employeeCode = None
             else:
                 label = None
                 employeeCode = None
@@ -523,10 +530,10 @@ def runRecognitionJob(objectId, faceJobStates):
             try:
                 imageBytes = np.frombuffer(getImage, dtype=np.uint8)
                 faceImage = cv2.imdecode(imageBytes, cv2.IMREAD_COLOR)
-
+                test = 0
                 if faceImage is not None:
                     try:
-                        if state["step"] > 0 and compareAkaze(faceImage, state["last_frame"]):
+                        if state["step"] > 0 and compareAkaze(faceImage, state["last_frame"]) and test:
                             name = state["result"][0] if len(state["result"]) else None
                             code = state["code"]
                             log(f"[ID {objectId}] Frame giống trước — dùng lại kết quả {name}")
@@ -557,6 +564,7 @@ def runRecognitionJob(objectId, faceJobStates):
 
 def displayText(frame, x, y, w, light, smallFace, angle, lowSpeed, blur, color):
     try:
+        return frame
         x = x + w
         conditions = [
             (not light, "Thiếu sáng", (0, 0, 0)),
@@ -572,7 +580,7 @@ def displayText(frame, x, y, w, light, smallFace, angle, lowSpeed, blur, color):
             if condition:
                 try:
                     (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-                    frame = drawTextVietnamese(frame, text, (x, textY), fontPath='fonts/Montserrat-SemiBold.otf', fontSize=22, background=rectColor)
+                    frame = drawTextVietnamese(frame, text, (x, textY), background=rectColor)
                     textY += textHeight + 18
                 except Exception as e:
                     log(f"Error drawing text '{text}' at position ({x}, {textY}): {e}", True)
@@ -741,7 +749,7 @@ def waitFullName():
         if stopThread:
             stopThread = False
         while not stopThread:
-            if checkTime(resetCallTTS, 0.3):
+            if checkTime(resetCallTTS, 0.5):
                 if len(objCheckName):
                     listName = checkFormatTXT(objCheckName)
                     if listName != '':
@@ -833,22 +841,27 @@ def corruptImageDetected(image):
         log(f"Error in corruptImageDetected: {e}", True)
         return True
 
-def drawTextVietnamese(img, text, position, fontPath='fonts/Roboto-Regular.ttf', fontSize=20, color=(255, 255, 255), background=(65, 169, 35)):
+def drawTextVietnamese(img, text, position, color=(255, 255, 255), background=(65, 169, 35), cache=False):
     try:
+        return img
         imgPIL = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         draw = ImageDraw.Draw(imgPIL)
-
-        font = ImageFont.truetype(fontPath, fontSize)
-
-        bbox = draw.textbbox((0, 0), text, font=font)
-        textWidth = bbox[2] - bbox[0]
-        textHeight = bbox[3] - bbox[1]
+        if cache and text in textSizeCache:
+            textWidth, textHeight = textSizeCache[text]
+        else:
+            bbox = draw.textbbox((0, 0), text, font=font)
+            textWidth = bbox[2] - bbox[0]
+            textHeight = bbox[3] - bbox[1]
+            if cache:
+                textSizeCache[text] = (textWidth, textHeight)
 
         x, y = position
 
         draw.rectangle([(x - 15, y - textHeight - 12), (x + textWidth + 12, y)], fill=background)
 
         draw.text((x, y - textHeight - 10), text, font=font, fill=color)
+
+        # draw.text(position, text, font=font, fill=color)
 
         return cv2.cvtColor(np.array(imgPIL), cv2.COLOR_RGB2BGR)
     except Exception as e:
@@ -1042,7 +1055,7 @@ def videoCapture():
 
                             name = trackName.get(objectId, "Đang kiểm tra..." if state["step"] > 0 else "Người mới")
                             if(state["success"]):
-                                frame = drawTextVietnamese(frame, name, (x, y), fontPath='fonts/Montserrat-SemiBold.otf', fontSize=22)
+                                frame = drawTextVietnamese(frame, name, (x, y))
                             else:
                                 if name == "Người mới":
                                     bColor = (255, 0, 0)
@@ -1052,7 +1065,7 @@ def videoCapture():
                                     bColor = (65, 169, 35)
                                 frame = displayText(frame, x, y, w, light, False, True, True, False, Color)
 
-                                frame = drawTextVietnamese(frame, name, (x, y), fontPath='fonts/Montserrat-SemiBold.otf', fontSize=22, background=bColor)
+                                frame = drawTextVietnamese(frame, name, (x, y), background=bColor)
                 else:
                     if worked:
                         worked = False
@@ -1091,7 +1104,7 @@ def videoCapture():
         cv2.destroyAllWindows()
 
 def handleImage(camera, labelWidget, faceDetection, tracker):
-    global faceJobStates, trackName, faceSpeedTrackers, startThread, frameCount, prevTime, fps, sleepTimer, minObjectId, worked
+    global faceJobStates, trackName, faceSpeedTrackers, startThread, frameCount, prevTime, fps, sleepTimer, minObjectId, worked, textSizeCache
     try:
         ret, frame = camera.read()
         
@@ -1131,7 +1144,6 @@ def handleImage(camera, labelWidget, faceDetection, tracker):
                             rects.append((x, y, width, height))
                             if  width >= 55 and width < 65:
                                     frame = displayText(frame, x, y, width, True, True, True, True, False, Color)
-
             objects = tracker.update(rects)
             if len(objects):
                 sleepTimer = datetime.now() + timedelta(minutes=1)
@@ -1170,7 +1182,7 @@ def handleImage(camera, labelWidget, faceDetection, tracker):
                                     centerPixel = (centerXPixel, centerYPixel)
 
                                     normSpeed = 0
-                                    pixelSpeed = 0
+                                    # pixelSpeed = 0
 
                                     if objectId not in faceSpeedTrackers:
                                         faceSpeedTrackers[objectId] = {
@@ -1187,15 +1199,15 @@ def handleImage(camera, labelWidget, faceDetection, tracker):
                                                                 centerNorm[1] - prevData["prev_norm"][1])
                                             normSpeed = round(normDist / deltaTime, 2)
 
-                                            pixelDist = math.hypot(
-                                                centerPixel[0] - prevData["prev_pixel"][0],
-                                                centerPixel[1] - prevData["prev_pixel"][1]
-                                            )
-                                            pixelSpeed = round(pixelDist / deltaTime, 2)
+                                            # pixelDist = math.hypot(
+                                            #     centerPixel[0] - prevData["prev_pixel"][0],
+                                            #     centerPixel[1] - prevData["prev_pixel"][1]
+                                            # )
+                                            # pixelSpeed = round(pixelDist / deltaTime, 2)
 
-                                            text = f"N:{normSpeed}/s | P:{pixelSpeed}px/s"
-                                            cv2.putText(frame, text, (x, y + h + 20),
-                                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, Color.Orange, 2)
+                                            # text = f"N:{normSpeed}/s | P:{pixelSpeed}px/s"
+                                            # cv2.putText(frame, text, (x, y + h + 20),
+                                            #             cv2.FONT_HERSHEY_SIMPLEX, 0.5, Color.Orange, 2)
 
                                         faceSpeedTrackers[objectId] = {
                                             "prev_norm": centerNorm,
@@ -1256,17 +1268,18 @@ def handleImage(camera, labelWidget, faceDetection, tracker):
                         name = trackName.get(objectId, "Đang kiểm tra..." if state["step"] > 0 else "Người mới")
 
                         if(state["success"]):
-                            frame = drawTextVietnamese(frame, name, (x, y), fontPath='fonts/Montserrat-SemiBold.otf', fontSize=22)
+                            # frame = drawTextVietnamese(frame, name, (x, y), cache=True)
+                            cv2.rectangle(frame, (x, y), (x+w,y+h), Color.Green, 2)
                         else:
                             if name == "Người mới":
-                                bColor = (255, 0, 0)
+                                lColor = (0, 0, 255)
                             elif name == "Đang kiểm tra...":
-                                bColor = (249, 172, 75)
+                                lColor = (75, 172, 249)
                             else:
-                                bColor = (65, 169, 35)
+                                lColor = (65, 169, 35)
+                            cv2.rectangle(frame, (x, y), (x+w,y+h), lColor, 2)
                             # frame = displayText(frame, x, y, w, light, False, True, True, False, Color)
-
-                            frame = drawTextVietnamese(frame, name, (x, y), fontPath='fonts/Montserrat-SemiBold.otf', fontSize=22, background=bColor)
+                            # frame = drawTextVietnamese(frame, name, (x, y), background=bColor, cache=True)
             else:
                 if worked:
                     worked = False
@@ -1277,6 +1290,7 @@ def handleImage(camera, labelWidget, faceDetection, tracker):
                     trackName = {}
                     faceSpeedTrackers = {}
                     minObjectId = None
+                    textSizeCache = {}
 
             if sleepTimer >= datetime.now():
                 text = f'FPS: {fps} - ID: {minObjectId}'
@@ -1297,8 +1311,9 @@ def handleImage(camera, labelWidget, faceDetection, tracker):
         labelWidget.configure(image=photoImage)
         labelWidget.after(1, handleImage, camera, labelWidget, faceDetection, tracker)
     except Exception as e:
+        print(e)
         log(f"Error handleImage: {e}", True)
-        textToSpeechSleep("Đã xảy ra lỗi xử lý hình ảnh", 1.0, False)
+        textToSpeechSleep("Đã xảy ra lỗi xử lý hình ảnh", 1.2, False)
         handleImage(camera, labelWidget, faceDetection, tracker)
 
 def addNewEntry(code, name, image, timestamp=None):
@@ -1384,7 +1399,9 @@ def openCam():
         camera.set(cv2.CAP_PROP_EXPOSURE , -4)
         mpFaceDetection = mp.solutions.face_detection
         faceDetection = mpFaceDetection.FaceDetection(min_detection_confidence=0.5, model_selection=1)
+        start = time.time()
         tracker = CentroidTracker(maxDisappeared=5, maxDistance=60, useCache=True, cacheLifetime=1.5, killJob=killJob)
+        print(f'CentroidTracker: {time.time() - start}')
         try:
             if not checkInternet():
                 camera.release()
@@ -1412,6 +1429,8 @@ def openCam():
         return
 
 if __name__ == "__main__":
+    font = ImageFont.truetype('fonts/Montserrat-SemiBold.otf', 20)
+    textSizeCache = {}
     window = Tk()
     window.title("Face Recognition by TMS")
     window.geometry("1024x535")

@@ -252,6 +252,7 @@ def videoCapture():
     global checkTimeRecognition, trackingIdAssign, imageHash
 
     rtsp = f"rtsp://{user}:{password}@{ip}:{port}/cam/realmonitor?channel=1&subtype=0"
+    # rtsp = f"rtsp://{user}:{password}@{ip}:{port}/Streaming/Channels/101"
     video = "output_video.avi"
     video2 = "output_video2.avi"
     cap = cv2.VideoCapture(rtsp)

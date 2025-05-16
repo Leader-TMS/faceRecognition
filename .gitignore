@@ -14,10 +14,11 @@
 /RaspberryPi
 /svmModel.pkl
 /labelEncoder.pkl
-/config.ini
 /tracedModel
 /__pycache__
-/employee.db
+employee.db
 /logs
 /embeddings
 /index
+/embeddingsWithInsight
+/indexWithInsight
