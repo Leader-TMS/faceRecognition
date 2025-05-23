@@ -44,3 +44,8 @@ botocore==1.37.5
 face-recognition==1.3.0
 # https://github.com/hanifabd/realtime-head-pose-detection/blob/master/app.py
 faiss-cpu==1.8.0
+protobuf==3.20.3
+
+# Raspberry
+# protobuf==4.25.1
+# onnx==1.18.0

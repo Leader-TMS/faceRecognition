@@ -4,7 +4,7 @@ import numpy as np
 from insightface.app import FaceAnalysis
 
 # Khởi tạo model insightface
-app = FaceAnalysis(name='buffalo_s')
+app = FaceAnalysis(name='buffalo_sc')
 app.prepare(ctx_id=0)  # Dùng CPU, nếu có GPU bạn có thể để ctx_id=0
 
 DATASET = "dataset"

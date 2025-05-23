@@ -68,7 +68,7 @@ class CentroidTracker:
                 self.reinstalled = False
 
             inputCentroids = np.zeros((len(rects), 2), dtype="int")
-            for i, (startX, startY, endX, endY) in enumerate(rects):
+            for i, (startX, startY, endX, endY, _) in enumerate(rects):
                 cX = (startX + endX) // 2
                 cY = (startY + endY) // 2
                 inputCentroids[i] = (cX, cY)

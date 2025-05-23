@@ -139,6 +139,7 @@ if __name__ == "__main__":
         ('014', 'RF004', 'Nguyễn Văn Hiếu', 'Văn Hiếu', '2004-05-25', 'M', 'hieunguyen130701iuh@gmail.com', '0123344556', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
         ('015', 'RF004', 'Trần Mạc Anh Tuyên', 'Anh Tuyên', '2004-05-25', 'M', 'acetuhoang@gmail.com', '0123344556', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
         ('016', 'RF004', 'Thái Văn Quý', 'Văn Quý', '2004-05-25', 'M', 'acetuhoang@gmail.com', '0123344556', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
+        ('017', 'RF004', 'Nguyễn Xuân Minh', 'Anh Minh', '2004-05-25', 'M', 'acetuhoang@gmail.com', '0123344556', datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), None),
     ]
 
     cursor.executemany('''
@@ -161,6 +162,12 @@ if __name__ == "__main__":
     recs = cursor.execute(sql)
     for row in recs:
         print(row)
+
+#     cursor.execute("""
+#     UPDATE employees
+#     SET full_name = ?
+#     WHERE employee_code = ?
+# """, ('Nguyễn Xuân Minh', '017'))
 
     conn.commit()
     conn.close()

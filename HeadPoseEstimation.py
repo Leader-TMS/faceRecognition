@@ -271,7 +271,7 @@ def cameraForward(frame, windowName = None, folderName = None):
             p1 = (int(nose2d[0]), int(nose2d[1]))
             p2 = (int(nose2d[0] + y * 10), int(nose2d[1] - x * 10))
 
-            cv2.line(frame, p1, p2, (255, 0, 0), 3)
+            # cv2.line(frame, p1, p2, (255, 0, 0), 3)
             (textWidth, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
 
             xText = ((xFace + wFace) // 2) - (textWidth // 2)
