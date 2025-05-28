@@ -3,6 +3,7 @@ import numpy as np
 import time
 from facesController import CameraReader
 
+
 cam1 = CameraReader(0)
 cam2 = CameraReader(2)
 cam1.start()
