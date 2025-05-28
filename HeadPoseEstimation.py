@@ -11,14 +11,12 @@ app.prepare(ctx_id=0)
 
 mpFaceMesh = mp.solutions.face_mesh
 faceMesh = mpFaceMesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence=0.5)
-mpDrawing = mp.solutions.drawing_utils
-drawingSpec = mpDrawing.DrawingSpec(thickness=1, circle_radius=1)
-# looking = {"right": [], "right_up":[], "right_down": [], "left": [], "left_up":[], "left_down":[], "down": [], "up": []}
 looking = {"right": [], "left": [], "down": [], "up": []}
 
 def checkAndSaveFace(value, direction, faceFilename, faceImg):
     value = round(value,1)
     if value not in looking[direction] and faceImg.size > 0:
+        print(f'value: {value}')
         looking[direction].append(value)
         flippedFaceImg = cv2.flip(faceImg, 1)
         cv2.imwrite(faceFilename, flippedFaceImg)
@@ -48,10 +46,6 @@ def drawEllipseForProgress(frame, xFace, yFace, wFace, hFace, looking):
         "left": 40,
         "down": 40,
         "up": 40,
-        # "right_up": 50,
-        # "right_down": 50,
-        # "left_up": 50,
-        # "left_down": 50
     }
 
     isDone = 0
@@ -68,23 +62,6 @@ def drawEllipseForProgress(frame, xFace, yFace, wFace, hFace, looking):
             rayLength = (wFace - xFace) * 0.1
             xEnd = int(xStart + rayLength * math.cos(math.radians(angle)))
             yEnd = int(yStart + rayLength * math.sin(math.radians(angle)))
-            
-            # if (angle >= 0 and angle < 22.5) or (angle >= 337.5 and angle < 360):
-            #     direction = "right"
-            # elif angle >= 22.5 and angle < 67.5:
-            #     direction = "right_down"
-            # elif angle >= 67.5 and angle < 112.5:
-            #     direction = "down"
-            # elif angle >= 112.5 and angle < 157.5:
-            #     direction = "left_down"
-            # elif angle >= 157.5 and angle < 202.5:
-            #     direction = "left"
-            # elif angle >= 202.5 and angle < 247.5:
-            #     direction = "left_up"
-            # elif angle >= 247.5 and angle < 292.5:
-            #     direction = "up"
-            # elif angle >= 292.5 and angle < 337.5:
-            #     direction = "right_up"
 
             if (angle >= 0 and angle < 45) or (angle >= 315 and angle < 360):
                 direction = "right"
@@ -164,7 +141,6 @@ def cameraForward(frame, windowName = None, folderName = None):
             h, w = faceImg.shape[:2]
             if h != 160 and faceImg.size > 0 or w != 160 and faceImg.size > 0:
                 faceImgResized = cv2.resize(faceImg, (160, 160))
-                print(f"Resized face image dimensions: {faceImgResized.shape[0]}x{faceImgResized.shape[1]}")
             else:
                 faceImgResized = faceImg 
 
@@ -185,19 +161,21 @@ def cameraForward(frame, windowName = None, folderName = None):
             face2d = np.array(face2d, dtype=np.float64)
             face3d = np.array(face3d, dtype=np.float64)
 
-            # focalLength = 1 * imgW
-
-            camMatrix = np.array([[imgW, 0, imgH / 2],
-                                  [0, imgW, imgW / 2],
+            # camMatrix = np.array([[imgW, 0, imgH / 2],
+            #                       [0, imgW, imgW / 2],
+            #                       [0, 0, 1]])
+            
+            camMatrix = np.array([[imgW, 0, imgW / 2],
+                                  [0, imgW, imgH / 2],
                                   [0, 0, 1]])
 
             distMatrix = np.zeros((4, 1), dtype=np.float64)
 
-            success, rotVec, transVec = cv2.solvePnP(face3d, face2d, camMatrix, distMatrix)
+            _, rotVec, transVec = cv2.solvePnP(face3d, face2d, camMatrix, distMatrix)
 
-            rmat, jac = cv2.Rodrigues(rotVec)
+            rmat, _ = cv2.Rodrigues(rotVec)
 
-            angles, mtxR, mtxQ, Qx, Qy, Qz = cv2.RQDecomp3x3(rmat)
+            angles, _, _, _, _, _ = cv2.RQDecomp3x3(rmat)
 
             x = angles[0] * 360
             y = angles[1] * 360
@@ -209,55 +187,9 @@ def cameraForward(frame, windowName = None, folderName = None):
                 if y < -3.5:
                     checkAndSaveFace(y, "left", faceFilename, faceImgResized)
                     text = "Looking Left"
-                    # checkMore = False
-                    # if y >= -15:
-                    #     if x < -5:
-                    #         checkMore = True
-                    #         checkAndSaveFace(x, "left_down", faceFilename, faceImgResized)
-                    #         text += " Down"
-                    #     elif x > 6.5:
-                    #         checkMore = True
-                    #         checkAndSaveFace(x, "left_up", faceFilename, faceImgResized)
-                    #         text += " Up"
-                    #     if not checkMore:
-                    #         checkAndSaveFace(y, "left", faceFilename, faceImgResized)
-                    # else:
-                    #     if x < 3:
-                    #         checkMore = True
-                    #         checkAndSaveFace(x, "left_down", faceFilename, faceImgResized)
-                    #         text += " Down"
-                    #     elif x > 10:
-                    #         checkMore = True
-                    #         checkAndSaveFace(x, "left_up", faceFilename, faceImgResized)
-                    #         text += " Up"
-                    # if not checkMore:
-                    #         checkAndSaveFace(y, "left", faceFilename, faceImgResized)
                 elif y > 3.5:
                     checkAndSaveFace(y, "right", faceFilename, faceImgResized)
                     text = "Looking Right"
-                    # checkMore = False
-                    # if y < 10:
-                    #     if x < -5:
-                    #         checkMore = True
-                    #         checkAndSaveFace(x, "right_down", faceFilename, faceImgResized)
-                    #         text += " Down"
-                    #     elif x > 6.5:
-                    #         checkMore = True
-                    #         checkAndSaveFace(x, "right_up", faceFilename, faceImgResized)
-                    #         text += " Up"
-                    #     if not checkMore:
-                    #         checkAndSaveFace(y, "right", faceFilename, faceImgResized)
-                    # else:
-                    #     if x < 3:
-                    #         checkMore = True
-                    #         checkAndSaveFace(x, "right_down", faceFilename, faceImgResized)
-                    #         text += " Down"
-                    #     elif x > 10:
-                    #         checkMore = True
-                    #         checkAndSaveFace(x, "right_up", faceFilename, faceImgResized)
-                    #         text += " Up"
-                    # if not checkMore:
-                    #     checkAndSaveFace(y, "right", faceFilename, faceImgResized)
                 elif x < -2:
                     checkAndSaveFace(x, "down", faceFilename, faceImgResized)
                     text = "Looking Down"
@@ -267,10 +199,10 @@ def cameraForward(frame, windowName = None, folderName = None):
                 else:
                     text = "Forward"
 
-            nose3dProjection, jacobian = cv2.projectPoints(nose3d, rotVec, transVec, camMatrix, distMatrix)
-            p1 = (int(nose2d[0]), int(nose2d[1]))
-            p2 = (int(nose2d[0] + y * 10), int(nose2d[1] - x * 10))
-
+            # nose3dProjection, jacobian = cv2.projectPoints(nose3d, rotVec, transVec, camMatrix, distMatrix)
+            # p1 = (int(nose2d[0]), int(nose2d[1]))
+            # p2 = (int(nose2d[0] + y * 10), int(nose2d[1] - x * 10))
+            
             # cv2.line(frame, p1, p2, (255, 0, 0), 3)
             (textWidth, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
 
@@ -285,26 +217,10 @@ def cameraForward(frame, windowName = None, folderName = None):
             cv2.putText(frame, "y: " + str(np.round(y, 2)), (450, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
             cv2.putText(frame, "z: " + str(np.round(z, 2)), (450, 120), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
 
-            # cv2.putText(frame, f"Up: {len(looking['up'])}", (500, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-            # cv2.putText(frame, f"Down: {len(looking['down'])}", (500, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-            # cv2.putText(frame, f"Right: {len(looking['right'])}", (500, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-            # cv2.putText(frame, f"Left: {len(looking['left'])}", (500, 280), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-
-            # cv2.putText(frame, f"Left Up: {len(looking['left_up'])}", (500, 320), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-            # cv2.putText(frame, f"Left Down: {len(looking['left_down'])}", (500, 360), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-            # cv2.putText(frame, f"Right Up: {len(looking['right_up'])}", (500, 400), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-            # cv2.putText(frame, f"Right Down: {len(looking['right_down'])}", (500, 440), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-
         end = time.time()
         totalTime = end - start
         fps = 1 / totalTime
         cv2.putText(frame, f'FPS: {int(fps)}', (20, 460), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        # mpDrawing.draw_landmarks(
-        #     image=frame,
-        #     landmark_list=faceLandmarks,
-        #     connections=mpFaceMesh.FACEMESH_CONTOURS,
-        #     landmark_drawing_spec=drawingSpec,
-        #     connection_drawing_spec=drawingSpec)
 
     if not windowName:
         return frame

@@ -1,7 +1,7 @@
 import cv2
 import mediapipe as mp
 import time
-from CentroidTracker import CentroidTracker
+from facesController import CentroidTracker
 
 tracker = CentroidTracker(maxDisappeared=5, maxDistance=60, useCache=True, cacheLifetime=1.5)
 mpFaceDetection = mp.solutions.face_detection

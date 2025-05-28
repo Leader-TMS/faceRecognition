@@ -31,7 +31,7 @@ import subprocess
 import signal
 from multiprocessing import Process, Manager
 import socket
-from CentroidTracker import CentroidTracker
+from facesController import CentroidTracker
 import requests
 from PIL import ImageFont, ImageDraw, Image, ImageTk
 from tkinter import Tk, Canvas, PhotoImage, Label

@@ -32,7 +32,7 @@ import subprocess
 import signal
 from multiprocessing import Process, Manager
 import socket
-from CentroidTracker import CentroidTracker
+from facesController import CentroidTracker
 from collections import deque
 import requests
 from PIL import ImageFont, ImageDraw, Image, ImageTk

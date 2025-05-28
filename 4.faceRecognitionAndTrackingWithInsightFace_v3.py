@@ -27,7 +27,7 @@ import subprocess
 import signal
 from multiprocessing import Process, Manager
 import socket
-from facesController import CentroidTracker
+from facesController import CentroidTracker, CameraReader
 import requests
 from PIL import ImageFont, ImageDraw, Image, ImageTk
 from tkinter import Tk, Canvas, PhotoImage, Label
@@ -83,7 +83,8 @@ sleepTimer = datetime.now()
 minObjectId = None
 worked = False
 session = requests.Session() 
-dataListGlobal = []
+dataList = []
+dataListLock = threading.Lock()
 # NamedTemporaryFile
 class Color:
     Red = (0, 0, 255)
@@ -126,20 +127,21 @@ def getIndexCam():
         devs = os.listdir('/dev')
         devVideo = [int(dev[5:]) for dev in devs if dev.startswith('video') and dev[5:].isdigit()]
         devVideo = sorted(devVideo)
-        
+        arrCam = []
         for index in devVideo:
             cap = cv2.VideoCapture(index)
             if cap.isOpened():
                 ret, _ = cap.read()
                 cap.release()
                 if ret:
-                    return index
+                    arrCam.append(index)
+                    # return index
             else:
                 cap.release()
-        return None
+        return arrCam
     except Exception as e:
         log(f"getIndexCam: {e}", True)
-        return None
+        return arrCam
 
 def killJob(objectId):
     log(f"Prepare to kill job object {objectId}...")
@@ -260,12 +262,12 @@ def faceRecognition(faceImage):
                         label = employeeCode['short_name']
                         employeeCode = employeeCode['employee_code']
                 elif sim >= 0.5:
-                    employeeCode = labelList[I[0][0]]
-                    employeeCode = getEmployeesByCode(employeeCode)
-                    if employeeCode:
-                        label = employeeCode['short_name']
-                        employeeCode = employeeCode['employee_code']
-                        saveFaceDirection(faceImage, f"evidences/almostSimilar/{employeeCode}_{label}")
+                    # employeeCode = labelList[I[0][0]]
+                    # employeeCode = getEmployeesByCode(employeeCode)
+                    # if employeeCode:
+                    #     label = employeeCode['short_name']
+                    #     employeeCode = employeeCode['employee_code']
+                    #     saveFaceDirection(faceImage, f"evidences/almostSimilar/{employeeCode}_{label}")
                     label = None
                     employeeCode = None
                 else:
@@ -525,22 +527,19 @@ def updateInfo(employeeCode, image):
                 thread.daemon = True
                 thread.start()
 
-            pathImage = saveFaceDirection(image, f"evidences/valid/{shortName}")
+            saveFaceDirection(image, f"evidences/valid/{shortName}")
 
             thread = threading.Thread(
                 target=addNewEntry,
                 kwargs={
                     'code': employeeCode,
                     'name': wrapText(fullName),
-                    'image': pathImage if pathImage else "assets/images/facialRecognitionInterface/image_6.png"
+                    'image': f"avatar/{employeeCode}.jpg"
                 }
             )
             thread.daemon = True
             thread.start()
-            # addNewEntry(code=employeeCode, name=wrapText(fullName), image=pathImage if pathImage else "assets/images/facialRecognitionInterface/image_6.png")
-
             saveAttendance("face", employeeCode, genUniqueId())
-                # textToSpeech("Lỗi lưu dữ liệu server", 1.2)
             
         else:
             textToSpeech("Mã nhân viên chưa được đăng ký trong hệ thống.", 1.2, 8)
@@ -573,10 +572,10 @@ def waitFullName(seenCodes=None, isFirstCall=True):
             text = ", ".join(newItems.values())
             if text:
                 seenCodes.update(newItems.keys())
-                # if isFirstCall:
-                #     generateAndPlayAudio(f"Xin chào {text}", 1.2, personName)
-                # else:
-                #     generateAndPlayAudio(f"{text}", 1.2, personName)
+                if isFirstCall:
+                    generateAndPlayAudio(f"Xin chào {text}", 1.2, personName)
+                else:
+                    generateAndPlayAudio(f"{text}", 1.2, personName)
 
             if len(objCheckName) > currentCount:
                 waitFullName(seenCodes, isFirstCall=False)
@@ -626,129 +625,186 @@ def checkInternet(host="8.8.8.8", port=53, timeout=3):
     except socket.error:
         return False
 
-def handleImage(camera, labelWidget, tracker):
+def tileImages(images, gridSize=None, imageSize=(360, 480)):
+    if gridSize is None:
+        gridCols = int(np.ceil(np.sqrt(len(images))))
+        gridRows = int(np.ceil(len(images) / gridCols))
+    else:
+        gridRows, gridCols = gridSize
+
+    blankImage = np.zeros((imageSize[0], imageSize[1], 3), dtype=np.uint8)
+    normalized = []
+
+    for img in images:
+        resized = cv2.resize(img, (imageSize[1], imageSize[0]))
+        normalized.append(resized)
+
+    while len(normalized) < gridRows * gridCols:
+        normalized.append(blankImage.copy())
+
+    rows = []
+    for i in range(0, gridRows * gridCols, gridCols):
+        row = cv2.hconcat(normalized[i:i + gridCols])
+        rows.append(row)
+
+    return cv2.vconcat(rows)
+
+def resizeWithPadding(image, targetWidth=605, targetHeight=454, color=(0, 0, 0)):
+    h, w = image.shape[:2]
+    scale = min(targetWidth / w, targetHeight / h)
+    newW, newH = int(w * scale), int(h * scale)
+    resized = cv2.resize(image, (newW, newH), interpolation=cv2.INTER_LANCZOS4)
+
+    deltaW = targetWidth - newW
+    deltaH = targetHeight - newH
+    top, bottom = deltaH // 2, deltaH - deltaH // 2
+    left, right = deltaW // 2, deltaW - deltaW // 2
+
+    return cv2.copyMakeBorder(resized, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
+
+
+def handleImage(labelWidget, tracker):
     global faceJobStates, startThread, frameCount, prevTime, fps, sleepTimer, minObjectId, worked, textSizeCache
     try:
-        openCamera = time.time()
-        ret, frame = camera.read()
-        
-        if not ret:
-            camera.release()
-            cv2.destroyAllWindows()
-            time.sleep(0.5)
-            textToSpeechSleep("Máy ảnh bị mất tín hiệu, Bắt đầu khởi động lại", 1.2)
-            return
-        elif frame is not None and frame.size:
-            frame = cv2.resize(frame, (480, 360), interpolation=cv2.INTER_LANCZOS4)
-
-            originalImage = frame.copy()
-            frameCount += 1
-            currentTime = time.time()
-            if currentTime - prevTime >= 1:
-                fps = frameCount
-                frameCount = 0
-                prevTime = currentTime
-                
-            frame.flags.writeable = False
-            bboxes, kpss = detModel.detect(frame, max_num=3)
-            frame.flags.writeable = True
-            rects = []
-
-            for i, box in enumerate(bboxes):
-                x1, y1, x2, y2 = box[:4].astype(int)
-                score = box[4]
-                if score < 0.6:
-                    continue
-                faceWidth = x2 - x1
-                faceHeight = y2 - y1
-                if faceWidth >= 30:
-                    rects.append((x1, y1, faceWidth, faceHeight, i))
-
-            objects = tracker.update(rects)
-            if len(objects):
-                sleepTimer = datetime.now() + timedelta(minutes=1)
-                if not worked:
-                    worked = True
-                for objectId, (x, y, w, h, idx) in objects.items():
-                    if objectId not in faceJobStates:
-                        faceJobStates[objectId] = manager.dict({
-                            "step": 0,
-                            "result": manager.list(),
-                            "code": None,
-                            "last_frame": None,
-                            "success": False,
-                            "list_face": manager.list(),
-                            "pid": None,
-                            "is_run": False
-                        })
-                    if objectId in faceJobStates:
-                        state = faceJobStates[objectId]
-                        filteredIds = [objId for objId, data in faceJobStates.items() if data['success'] == False]
-                        minObjectId = min(filteredIds) if filteredIds else None
-                        if objectId == minObjectId and not startThread.is_alive():
-                            faceCrop = originalImage[y:y+h, x:x+w]
-                            light = checkLight(faceCrop)
-                            if light:
-                                if len(state["list_face"]) < countThread:
-                                    if 0 <= idx < len(bboxes):
-                                        box = bboxes[idx]
-                                        kps = kpss[idx]
-                                        alignedFace = face_align.norm_crop(originalImage.copy(), landmark=kps)
-                                        success, encoded = cv2.imencode(".png", alignedFace)
-                                        if success:
-                                            faceJobStates[objectId]["list_face"].append(encoded.tobytes())
-                                elif not state["is_run"]:
-                                    faceJobStates[objectId]["is_run"] = True
-                                    startThread = Process(target=runRecognitionJob, args=(objectId, faceJobStates,))
-                                    startThread.daemon = True
-                                    startThread.start()
-                                elif state["step"] >= countThread:
-                                    names = state["result"]
-                                    if len(names) == countThread and names.count(None) == 0 and len(set(names)) == 1:
-                                        if not state["success"]:
-                                            if objectId in faceJobStates:
-                                                faceJobStates[objectId]["success"] = True
-                                            updateInfo(state["code"], faceCrop)
-                                            log(f"[ID {objectId}] Thành công: {names[0]}")
-                                    else:
-                                        log(f"[ID {objectId}] → reset lại")
-                                        if objectId in faceJobStates:
-                                            faceJobStates[objectId] = manager.dict({
-                                                "step": 0,
-                                                "result": manager.list(),
-                                                "code": None,
-                                                "last_frame": None,
-                                                "success": False,
-                                                "list_face": manager.list(),
-                                                "pid": None,
-                                                "is_run": False
-                                            })
-                                else:
-                                    log(f"[ID {objectId}] wait {datetime.now().strftime('%Y-%m-%d %H-%M-%S.%f')[:-3]}")
-                            else:
-                                turnOn()
-                    cv2.rectangle(frame, (x, y), (x+w,y+h), (255,0,0), 2)
+        frames = []
+        for i, cam in enumerate(cameras):
+            camFrame = cam.getFrame()
+            if camFrame is None or not cam.getStatus():
+                camFrame = cv2.putText(
+                    np.zeros((360, 480, 3), dtype=np.uint8),
+                    f"Camera {i+1} Error", (50, 240),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2
+                )
             else:
-                if worked:
-                    worked = False
-                    tracker.reset()
-                    for objectId in faceJobStates.keys():
-                        killJob(objectId)
-                    faceJobStates = manager.dict()
-                    minObjectId = None
-                    textSizeCache = {}
-
-            if sleepTimer >= datetime.now():
-                text = f'FPS: {fps} - ID: {minObjectId}'
+                fpscam = cam.getFps()
+                text = f'FPS: {fpscam:.2f}'
                 (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, 0.5, 1)
                 x, y = 15, 30
-                print(x,y)
-                cv2.rectangle(frame, (x - 8, y - textHeight - 8), (x + textWidth + 8, y + 8), (167, 80, 167), -1)
-                cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_DUPLEX, 0.5, Color.White, 1)
-            else:
-                turnOff()
+                cv2.rectangle(camFrame, (x - 8, y - textHeight - 8), (x + textWidth + 8, y + 8), (167, 80, 167), -1)
+                cv2.putText(camFrame, text, (x, y), cv2.FONT_HERSHEY_DUPLEX, 0.5, Color.White, 1)
+                frames.append(camFrame)
 
-            frame = cv2.resize(frame, (605, 454), interpolation=cv2.INTER_LANCZOS4)
+        if len(frames):
+            combined = tileImages(frames)
+        else:
+            combined = cv2.putText(
+                np.zeros((360, 480, 3), dtype=np.uint8),
+                "All Camera Error", (50, 180),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2
+            )
+        frame = resizeWithPadding(combined)
+            
+        originalImage = frame.copy()
+        frameCount += 1
+        currentTime = time.time()
+        if currentTime - prevTime >= 1:
+            fps = frameCount
+            frameCount = 0
+            prevTime = currentTime
+            
+        frame.flags.writeable = False
+        bboxes, kpss = detModel.detect(frame, max_num=2)
+        frame.flags.writeable = True
+        rects = []
+
+        for i, box in enumerate(bboxes):
+            x1, y1, x2, y2 = box[:4].astype(int)
+            score = box[4]
+            if score < 0.6:
+                continue
+            faceWidth = x2 - x1
+            faceHeight = y2 - y1
+            if faceWidth >= 30:
+                rects.append((x1, y1, faceWidth, faceHeight, i))
+
+        objects = tracker.update(rects)
+        if len(objects):
+            sleepTimer = datetime.now() + timedelta(minutes=1)
+            if not worked:
+                worked = True
+            for objectId, (x, y, w, h, idx) in objects.items():
+                if objectId not in faceJobStates:
+                    faceJobStates[objectId] = manager.dict({
+                        "step": 0,
+                        "result": manager.list(),
+                        "code": None,
+                        "last_frame": None,
+                        "success": False,
+                        "list_face": manager.list(),
+                        "pid": None,
+                        "is_run": False
+                    })
+                if objectId in faceJobStates:
+                    state = faceJobStates[objectId]
+                    filteredIds = [objId for objId, data in faceJobStates.items() if data['success'] == False]
+                    minObjectId = min(filteredIds) if filteredIds else None
+                    if objectId == minObjectId and not startThread.is_alive():
+                        faceCrop = originalImage[y:y+h, x:x+w]
+                        light = checkLight(faceCrop)
+                        if light:
+                            if len(state["list_face"]) < countThread:
+                                if 0 <= idx < len(bboxes):
+                                    box = bboxes[idx]
+                                    kps = kpss[idx]
+                                    alignedFace = face_align.norm_crop(originalImage.copy(), landmark=kps)
+                                    success, encoded = cv2.imencode(".png", alignedFace)
+                                    if success:
+                                        faceJobStates[objectId]["list_face"].append(encoded.tobytes())
+                            elif not state["is_run"]:
+                                faceJobStates[objectId]["is_run"] = True
+                                startThread = Process(target=runRecognitionJob, args=(objectId, faceJobStates,))
+                                startThread.daemon = True
+                                startThread.start()
+                            elif state["step"] >= countThread:
+                                names = state["result"]
+                                if len(names) == countThread and names.count(None) == 0 and len(set(names)) == 1:
+                                    if not state["success"]:
+                                        if objectId in faceJobStates:
+                                            faceJobStates[objectId]["success"] = True
+
+                                        imageBytes = np.frombuffer(faceJobStates[objectId]["list_face"][1], dtype=np.uint8)
+                                        faceImage = cv2.imdecode(imageBytes, cv2.IMREAD_COLOR)
+                                        updateInfo(state["code"], faceImage)
+                                        log(f"[ID {objectId}] Thành công: {names[0]}")
+                                else:
+                                    log(f"[ID {objectId}] → reset lại")
+                                    if objectId in faceJobStates:
+                                        faceJobStates[objectId] = manager.dict({
+                                            "step": 0,
+                                            "result": manager.list(),
+                                            "code": None,
+                                            "last_frame": None,
+                                            "success": False,
+                                            "list_face": manager.list(),
+                                            "pid": None,
+                                            "is_run": False
+                                        })
+                            else:
+                                log(f"[ID {objectId}] wait {datetime.now().strftime('%Y-%m-%d %H-%M-%S.%f')[:-3]}")
+                        else:
+                            turnOn()
+                # cv2.rectangle(frame, (x, y), (x+w,y+h), (255,0,0), 2)
+        else:
+            if worked:
+                worked = False
+                tracker.reset()
+                for objectId in faceJobStates.keys():
+                    killJob(objectId)
+                faceJobStates = manager.dict()
+                minObjectId = None
+                textSizeCache = {}
+
+        frame = resizeWithPadding(frame)
+
+        if sleepTimer >= datetime.now():
+            text = f'FPS: {fps} - ID: {minObjectId}'
+            (textWidth, textHeight), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, 0.5, 1)
+            x, y = 15, 30
+            cv2.rectangle(frame, (x - 8, y - textHeight - 8), (x + textWidth + 8, y + 8), (167, 80, 167), -1)
+            cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_DUPLEX, 0.5, Color.White, 1)
+        else:
+            turnOff()
+
 
         opencvImage = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         capturedImage = Image.fromarray(opencvImage)
@@ -756,19 +812,17 @@ def handleImage(camera, labelWidget, tracker):
 
         labelWidget.photoImage = photoImage
         labelWidget.configure(image=photoImage)
-        labelWidget.after(1, handleImage, camera, labelWidget, tracker)
+        labelWidget.after(1, handleImage, labelWidget, tracker)
     except Exception as e:
-        print(e)
         log(f"Error handleImage: {e}", True)
         # textToSpeechSleep("Đã xảy ra lỗi xử lý hình ảnh", 1.2, False)
-        handleImage(camera, labelWidget, tracker)
+        handleImage(labelWidget, tracker)
 
 def addNewEntry(code, name, image, timestamp=None):
     if timestamp is None:
         timestamp = datetime.now().strftime("%H:%M")
 
-    global dataListGlobal
-    dataListGlobal = [entry for entry in dataListGlobal if entry["code"] != code]
+    global dataList
     name, lineBreak = name
     newEntry = {
         "image": image,
@@ -777,13 +831,15 @@ def addNewEntry(code, name, image, timestamp=None):
         "lineBreak": lineBreak,
         "timestamp": timestamp
     }
+    with dataListLock:
+        
+        dataList = [entry for entry in dataList if entry["code"] != code]
+        dataList.insert(0, newEntry)
 
-    dataListGlobal.insert(0, newEntry)
+        if len(dataList) > 6:
+            dataList.pop()
 
-    if len(dataListGlobal) > 6:
-        dataListGlobal.pop()
-
-    renderListUsers(canvas, dataListGlobal)
+        renderListUsers(canvas, dataList)
 
 def renderListUsers(canvas, dataList, spacing=78):
     positions = []
@@ -815,8 +871,11 @@ def renderListUsers(canvas, dataList, spacing=78):
         try:
             pilImage = Image.open(entry["image"])
         except Exception as e:
-            print(f"Error loading image: {e}")
-            continue
+            try:
+                pilImage = Image.open("assets/images/facialRecognitionInterface/image_6.png")
+            except Exception as e2:
+                print(f"Error loading fallback image: {e2}")
+                continue
 
         tkImgT = ImageTk.PhotoImage(file="assets/images/facialRecognitionInterface/image_3.png")
         pilImage = pilImage.resize((65, 65))
@@ -836,42 +895,27 @@ def renderListUsers(canvas, dataList, spacing=78):
 def openCam():
     labelWidget = Label(window)
     labelWidget.place(x=15, y=66)
-    indexCam = getIndexCam()
-    if isinstance(indexCam, int):
-        camera = cv2.VideoCapture(indexCam)
-        camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-        camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
-        camera.set(cv2.CAP_PROP_EXPOSURE , -4)
-
-        tracker = CentroidTracker(maxDisappeared=5, maxDistance=60, useCache=True, cacheLifetime=1.5, killJob=killJob)
-
-        try:
-            if not checkInternet():
-                camera.release()
-                cv2.destroyAllWindows()
-                time.sleep(0.5)
-                textToSpeechSleep("./noInternet.wav", 1.2)
-                return
-            elif not camera.isOpened():
-                camera.release()
-                cv2.destroyAllWindows()
-                time.sleep(0.5)
-                textToSpeechSleep("Không tìm thấy máy ảnh, Vui lòng kiểm tra lại", 1.2)
-                return
-            else:
-                handleImage(camera, labelWidget, tracker)
-
-        except Exception as e:
-            log(f"Error in videoCapture: {e}", True)
-            turnOff()
-            camera.release()
+    tracker = CentroidTracker(maxDisappeared=5, maxDistance=60, useCache=True, cacheLifetime=1.5, killJob=killJob)
+    try:
+        if not checkInternet():
+            for cam in cameras:
+                cam.stop()
+                cam.join()
             cv2.destroyAllWindows()
             time.sleep(0.5)
-    else:
-        textToSpeechSleep("Không tìm thấy máy ảnh, Vui lòng kiểm tra lại", 1.2)
-        return
+            textToSpeechSleep("./noInternet.wav", 1.2)
+            return
+        else:
+            handleImage(labelWidget, tracker)
+
+    except Exception as e:
+        log(f"Error in videoCapture: {e}", True)
+        turnOff()
+        for cam in cameras:
+            cam.stop()
+            cam.join()
+        cv2.destroyAllWindows()
+        time.sleep(0.5)
 
 if __name__ == "__main__":
     font = ImageFont.truetype('fonts/Montserrat-SemiBold.otf', 20)
@@ -895,13 +939,23 @@ if __name__ == "__main__":
 
     canvas.create_text(751.0, 27.0, anchor="nw", text=datetime.now().strftime('%d-%m-%Y'), fill="#000000", font=("Amiko", -15, "bold"))
 
-    openCam()
+    cameras = []
 
+    for camId in [0, 2]:
+    # for camId in getIndexCam():
+        cam = CameraReader(camId)
+        cam.start()
+        cameras.append(cam)
+
+    openCam()
 
     window.resizable(True, True)
 
     def onClosing():
         turnOff()
+        for cam in cameras:
+            cam.stop()
+            cam.join()
         cv2.destroyAllWindows()
         window.destroy()
 
