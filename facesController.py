@@ -204,10 +204,16 @@ class CameraReader(threading.Thread):
                 currentTime = time.time()
                 self.fps = 1.0 / (currentTime - prevTime)
                 prevTime = currentTime
-                resized = cv2.resize(frame, (480, 360), interpolation=cv2.INTER_LANCZOS4)
-                resized = cv2.resize(frame, (320, 240), interpolation=cv2.INTER_LANCZOS4)
+                #resized = cv2.resize(frame, (480, 360), interpolation=cv2.INTER_LANCZOS4)
+                h, w = frame.shape[:2]
+                cropW, cropH = 320, 240
+                x1 = (w - cropW) // 2
+                y1 = (h - cropH) // 2
+                x2 = x1 + cropW
+                y2 = y1 + cropH
+                cropped = frame[y1:y2, x1:x2]
                 with self.lock:
-                    self.frame = resized
+                    self.frame = cropped
                     self.lastFrameTime = time.time()
                     self.isActive = True
             else:
